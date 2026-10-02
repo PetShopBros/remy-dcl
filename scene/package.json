@@ -1,0 +1,16 @@
+{
+  "name": "remy-scene",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "npx @dcl/sdk-commands start",
+    "build": "npx @dcl/sdk-commands build",
+    "deploy": "npx @dcl/sdk-commands deploy"
+  },
+  "dependencies": {
+    "@dcl/sdk": "^7.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

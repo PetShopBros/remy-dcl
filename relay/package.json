@@ -1,0 +1,12 @@
+{
+  "name": "remy-relay",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@upstash/redis": "^1.34.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}
