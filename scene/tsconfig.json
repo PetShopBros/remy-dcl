@@ -6,11 +6,12 @@
     "moduleResolution": "node",
     "baseUrl": ".",
     "target": "ES2020",
-    "lib": ["ES2020"],
+    "lib": ["ES2020", "DOM"],
     "types": [],
     "experimentalDecorators": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "@dcl/sdk/jsx-runtime"
+    "jsxImportSource": "@dcl/sdk/jsx-runtime",
+    "skipLibCheck": true
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules"]

@@ -1,19 +1,20 @@
 {
-  "display": {
-    "title": "Remy — AI NPC",
-    "description": "AI-controllable Remy NPC. Powered by remy-dcl.",
-    "favicon": "assets/scene/favicon_asset"
-  },
-  "owner": "",
-  "contact": {
-    "name": "PetShopBros",
-    "email": ""
-  },
-  "main": "bin/game.js",
-  "scene": {
-    "parcels": ["0,0"],
-    "base": "0,0"
-  },
-  "runtimeVersion": "7",
-  "worldConfiguration": {}
+    "display":  {
+                    "title":  "Remy ??AI NPC",
+                    "description":  "AI-controllable Remy NPC. Powered by remy-dcl.",
+                    "favicon":  "assets/scene/favicon_asset"
+                },
+    "owner":  "",
+    "contact":  {
+                    "name":  "PetShopBros",
+                    "email":  ""
+                },
+    "main":  "bin/game.js",
+    "scene":  {
+                  "parcels":  [
+                                  "46,115"
+                              ],
+                  "base":  "46,115"
+              },
+    "runtimeVersion":  "7"
 }
