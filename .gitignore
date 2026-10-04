@@ -5,3 +5,6 @@ dist/
 bin/
 *.log
 .vercel/
+
+.vercel
+.env*
