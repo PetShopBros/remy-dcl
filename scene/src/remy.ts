@@ -8,9 +8,12 @@ const EXPLORE_IDLE_TIMEOUT = 6.0
 const EMOTE_INTERVAL       = 8.0
 
 type AnimClip = 'Armature|Idle' | 'Armature|Walk' | 'Armature|Attack' | 'Armature|Hit'
-type Phase = 'idle' | 'moving' | 'exploring'
+type Phase = 'idle' | 'moving' | 'exploring' | 'following'
 
 let phase: Phase = 'idle'
+let followTimer = 0
+const FOLLOW_UPDATE_INTERVAL = 0.1
+const FOLLOW_DISTANCE = 2.5
 let pollTimer    = 0
 let moveTimer    = 0
 let idleTimer    = 0
@@ -35,7 +38,15 @@ const MAX_STEP = 8
 
 export function getRemyEntity() { return remyEntity }
 
-export function executeIntent(intent: 'FOLLOW' | 'MOVE_TO' | 'STOP' | 'EXPLORE') {
+export function getRemyStatus(): string {
+  if (!remyEntity) return 'Offline'
+  const tf = Transform.get(remyEntity)
+  const x = tf.position.x.toFixed(1)
+  const z = tf.position.z.toFixed(1)
+  return `Phase: ${phase}\nPos: ${x}, ${z}\nParcel: ${currentParcel}`
+}
+
+export function executeIntent(intent: 'FOLLOW' | 'MOVE_TO' | 'STOP' | 'EXPLORE' | 'STATUS' | 'EMOTE') {
   switch (intent) {
     case 'EXPLORE':
       idleTimer = EXPLORE_IDLE_TIMEOUT
@@ -46,6 +57,20 @@ export function executeIntent(intent: 'FOLLOW' | 'MOVE_TO' | 'STOP' | 'EXPLORE')
       setClip('Armature|Idle')
       break
     case 'FOLLOW':
+      phase = 'following'
+      followTimer = 0
+      setClip('Armature|Walk')
+      break
+    case 'STATUS':
+      break
+    case 'EMOTE':
+      if (phase === 'idle') {
+        const emotes: AnimClip[] = ['Armature|Attack', 'Armature|Hit']
+        const pick = emotes[Math.floor(Math.random() * emotes.length)]
+        isEmoting = true
+        emoteDuration = 1.5
+        setClip(pick)
+      }
       break
     case 'MOVE_TO':
       break
@@ -124,6 +149,48 @@ function remySystem(dt: number) {
       }
     }
   }
+  if (phase === 'following' && remyEntity) {
+    const player = Transform.getOrNull(engine.PlayerEntity)
+    if (!player) {
+      phase = 'exploring'
+      startExplore()
+    } else {
+      const px = player.position.x
+      const pz = player.position.z
+      const inBounds = px >= PARCEL_BOUNDS.minX && px <= PARCEL_BOUNDS.maxX &&
+                       pz >= PARCEL_BOUNDS.minZ && pz <= PARCEL_BOUNDS.maxZ
+      if (!inBounds) {
+        phase = 'exploring'
+        startExplore()
+      } else {
+        const tf = Transform.getMutable(remyEntity)
+        const dx = px - tf.position.x
+        const dz = pz - tf.position.z
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        if (dist > FOLLOW_DISTANCE) {
+          const speed = 4.0 * dt
+          const ratio = (dist - FOLLOW_DISTANCE) / dist
+          tf.position.x += dx * ratio * speed
+          tf.position.z += dz * ratio * speed
+          if (Math.abs(dx) + Math.abs(dz) > 0.01) {
+            tf.rotation = Quaternion.fromEulerDegrees(0, Math.atan2(dx, dz) * (180 / Math.PI), 0)
+          }
+          setClip('Armature|Walk')
+          if (labelEntity) {
+            const ltf = Transform.getMutable(labelEntity)
+            ltf.position = Vector3.create(tf.position.x, tf.position.y + 2.1, tf.position.z)
+          }
+          if (remyClickTarget) {
+            const ctf = Transform.getMutable(remyClickTarget)
+            ctf.position = Vector3.create(tf.position.x, tf.position.y + 0.7, tf.position.z)
+          }
+        } else {
+          setClip('Armature|Idle')
+        }
+      }
+    }
+  }
+
   if ((phase === 'moving' || phase === 'exploring') && remyEntity) {
     moveTimer += dt
     const t = Math.min(moveTimer / MOVE_DURATION, 1)
@@ -145,6 +212,10 @@ function remySystem(dt: number) {
     if (t >= 1) {
       setClip('Armature|Idle')
       void reportStatus('success', Date.now() - moveStartTime)
+      if (currentExploreId) {
+        void fetch(`${RELAY_URL}/api/explore-complete?id=${encodeURIComponent(currentExploreId)}`)
+        currentExploreId = null
+      }
       phase = 'idle'
       idleTimer = 0
     }
@@ -169,6 +240,8 @@ function parcelFromPos(x: number, z: number): string {
   return `${46 + px},${115 + pz}`
 }
 
+let currentExploreId: string | null = null
+
 function startExplore() {
   if (!remyEntity || phase !== 'idle') return
   const dest = randomInBounds()
@@ -182,6 +255,18 @@ function startExplore() {
   idleTimer = -(2 + Math.random() * 3)
   phase = 'exploring'
   setClip('Armature|Walk')
+  void claimNextParcel()
+}
+
+async function claimNextParcel() {
+  try {
+    const res = await fetch(`${RELAY_URL}/api/explore-next?agent=remy`)
+    const data = await res.json() as any
+    if (data.ok && data.parcel) {
+      currentExploreId = data.parcel.id
+      currentParcel = data.parcel.id
+    }
+  } catch { /* ignore */ }
 }
 
 async function pollCommand() {
