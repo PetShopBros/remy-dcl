@@ -307,6 +307,8 @@
         var bx = Math.floor((p.x - MIN) / BIN), by = Math.floor((p.y - MIN) / BIN);
         var k = bx + ':' + by; bins[k] = (bins[k] || 0) + 1;
       });
+      ctx.save();
+      ctx.beginPath(); ctx.rect(PAD.l, PAD.t, plot, plot); ctx.clip();   // 마지막 빈은 10칸보다 작으므로 지도 밖은 자름
       Object.keys(bins).forEach(function (k) {
         var parts = k.split(':'), bx = +parts[0], by = +parts[1];
         var t = Math.sqrt(Math.min(1, bins[k] / (BIN * BIN)));
@@ -314,6 +316,7 @@
         var x0 = MIN + bx * BIN, y1 = MIN + by * BIN + BIN - 1;   // 빈의 좌상단 셀
         ctx.fillRect(px(x0), py(y1), BIN * cell, BIN * cell);
       });
+      ctx.restore();
     } else {
       var now = Date.now();
       var older = [], recent = [];
