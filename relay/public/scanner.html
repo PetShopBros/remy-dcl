@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DCL World Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Layout: 상단 3개 큰 숫자 → 지도(좌) + 스캐너 패널(우). 좁은 화면에서는 한 열로 쌓임. */
+  :root {
+    --bg: #080B10;
+    --panel: #0E131A;
+    --map: #10161D;
+    --cell: #182028;
+    --grid: #1C2730;
+    --scan: #00E5A0;
+    --recent: #6CFFF0;
+    --dens-lo: #12382F;
+    --text: #D7E0E5;
+    --muted: #71808A;
+    --warn: #FF6B6B;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    padding-inline: 16px;
+    padding-block: 20px 32px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+  header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+  .brand { display: flex; flex-direction: column; gap: 2px; }
+  .brand .org { font-size: 11px; letter-spacing: .24em; color: var(--muted); }
+  .brand h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: .12em; }
+  .live { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: .2em; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--scan); box-shadow: 0 0 8px var(--scan); }
+  .live.off .dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  .live:not(.off) .dot { animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .live .dot { animation: none !important; } }
+
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--grid); padding: 14px 16px; min-width: 0; }
+  .stat .v { font-size: clamp(22px, 5vw, 38px); font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .stat .v.hot { color: var(--scan); text-shadow: 0 0 18px rgba(0,229,160,.28); }
+  .stat .l { margin-top: 6px; font-size: 10px; letter-spacing: .2em; color: var(--muted); }
+
+  .main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+  @media (max-width: 860px) { .main { grid-template-columns: minmax(0, 1fr); } }
+
+  .card { background: var(--panel); border: 1px solid var(--grid); min-width: 0; }
+  .mapcard { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .mapbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 10px; letter-spacing: .2em; color: var(--muted); }
+  .mapbar .mode b { color: var(--text); font-weight: 500; }
+  .stage { position: relative; width: 100%; }
+  canvas { display: block; width: 100%; background: var(--map); cursor: crosshair; }
+  .cursorbox { position: absolute; pointer-events: none; border: 1px solid var(--recent); box-shadow: 0 0 6px rgba(108,255,240,.5); display: none; }
+  .tip {
+    position: absolute; pointer-events: none; display: none; z-index: 2; min-width: 150px;
+    background: var(--panel); border: 1px solid var(--grid); padding: 8px 10px; font-size: 11px;
+    box-shadow: 0 0 14px rgba(0,229,160,.08);
+  }
+  .tip .k { font-size: 9px; letter-spacing: .2em; color: var(--muted); margin-top: 6px; }
+  .tip .k:first-child { margin-top: 0; }
+  .tip .s-on { color: var(--scan); }
+  .tip .s-off { color: var(--muted); }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; font-size: 10px; letter-spacing: .16em; color: var(--muted); }
+  .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: -1px; }
+  .legend .l-on { background: var(--scan); box-shadow: 0 0 6px var(--scan); }
+  .legend .l-rec { background: var(--recent); box-shadow: 0 0 6px var(--recent); }
+  .legend .l-off { background: var(--cell); border: 1px solid var(--grid); }
+  .legend .l-dens { background: linear-gradient(90deg, var(--dens-lo), var(--scan)); width: 22px; }
+
+  button {
+    font: inherit; font-size: 10px; letter-spacing: .2em; color: var(--text); background: transparent;
+    border: 1px solid var(--grid); padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--scan); color: var(--scan); }
+  button:focus-visible { outline: 2px solid var(--recent); outline-offset: 2px; }
+  button[aria-pressed="true"] { border-color: var(--scan); color: var(--scan); }
+
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .panel { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .panel h2 { margin: 0; font-size: 10px; font-weight: 500; letter-spacing: .24em; color: var(--muted); }
+  .kv { display: flex; flex-direction: column; gap: 2px; }
+  .kv .k { font-size: 9px; letter-spacing: .2em; color: var(--muted); }
+  .kv .v { font-size: 15px; font-variant-numeric: tabular-nums; }
+  .kv .v.hot { color: var(--scan); }
+  ul.recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  ul.recent li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--grid); font-variant-numeric: tabular-nums; font-size: 12px; }
+  ul.recent li:first-child { border-top: 0; }
+  ul.recent .t { color: var(--muted); }
+  ul.recent .empty { color: var(--muted); }
+  .err { color: var(--warn); font-size: 12px; }
+  .foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 10px; letter-spacing: .16em; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="org">LOWDOWN</span>
+      <h1>WORLD SCANNER</h1>
+    </div>
+    <div class="live" id="live"><span class="dot"></span><span id="liveText">CONNECTING</span></div>
+  </header>
+
+  <section class="stats" aria-label="Scan totals">
+    <div class="stat"><div class="v" id="sTotal">–</div><div class="l">WORLD CELLS</div></div>
+    <div class="stat"><div class="v hot" id="sScanned">–</div><div class="l">SCANNED</div></div>
+    <div class="stat"><div class="v" id="sCov">–</div><div class="l">COVERAGE</div></div>
+  </section>
+
+  <section class="main">
+    <div class="card mapcard">
+      <div class="mapbar">
+        <span class="mode">VIEW <b id="modeText">POINT MODE</b></span>
+        <button id="densBtn" type="button" aria-pressed="false">DENSITY 10×10</button>
+      </div>
+      <div class="stage" id="stage">
+        <canvas id="map" aria-label="DCL world coordinate map showing scanned parcels"></canvas>
+        <div class="cursorbox" id="cursorbox"></div>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="legend">
+        <span><i class="l-rec"></i>RECENT 6H</span>
+        <span><i class="l-on"></i>SCANNED</span>
+        <span><i class="l-off"></i>UNSCANNED</span>
+        <span><i class="l-dens"></i>DENSITY</span>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="card panel">
+        <h2>SCANNER STATUS</h2>
+        <div class="kv"><span class="k">LAST SCAN</span><span class="v hot" id="lastAgo">–</span></div>
+        <div class="kv"><span class="k">LAST SCAN (KST)</span><span class="v" id="lastAt">–</span></div>
+        <div class="kv"><span class="k">SCANNED</span><span class="v" id="pScanned">–</span></div>
+        <div class="kv"><span class="k">COVERAGE</span><span class="v" id="pCov">–</span></div>
+        <div class="err" id="err" hidden></div>
+      </div>
+      <div class="card panel">
+        <h2>RECENT</h2>
+        <ul class="recent" id="recent"><li class="empty">–</li></ul>
+      </div>
+    </aside>
+  </section>
+
+  <div class="foot">
+    <span id="updated">UPDATED –</span>
+    <button id="refresh" type="button">REFRESH</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var MIN = -150, MAX = 150, N = MAX - MIN + 1;       // DCL World 좌표 범위
+  var BIN = 10;                                       // density 집계 단위
+  var DENSITY_AUTO_AT = 1000;                         // 이 개수부터 density 자동 ON
+  var RECENT_MS = 6 * 3600 * 1000;
+  var PAD = { l: 38, r: 10, t: 10, b: 24 };
+  var C = { map: '#10161D', cell: '#182028', grid: '#1C2730', axis: '#2A3944', scan: '#00E5A0', recent: '#6CFFF0', lo: [0x12, 0x38, 0x2F], hi: [0x00, 0xE5, 0xA0], muted: '#71808A' };
+
+  var $ = function (id) { return document.getElementById(id); };
+  var canvas = $('map'), ctx = canvas.getContext('2d');
+  var state = { total: 0, scanned: 0, parcels: [], lookup: {}, densityPref: 'auto', geo: null, updatedAt: null };
+
+  var fmt = function (n) { return Number(n).toLocaleString('en-US'); };
+  var kst = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  var hhmm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false });
+
+  function ago(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + 's ago';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ago';
+    var h = Math.floor(m / 60);
+    if (h < 48) return h + 'h ' + (m % 60) + 'm ago';
+    return Math.floor(h / 24) + 'd ago';
+  }
+  function pct(scanned, total) {
+    if (!total) return '–';
+    var p = scanned / total * 100;
+    if (scanned > 0 && p < 0.01) return '<0.01%';
+    return p.toFixed(2) + '%';
+  }
+  function key(x, y) { return x + ',' + y; }
+  function densityOn() {
+    if (state.densityPref === 'on') return true;
+    if (state.densityPref === 'off') return false;
+    return state.scanned >= DENSITY_AUTO_AT;
+  }
+
+  /* ---------- data ---------- */
+  function load() {
+    return fetch('/api/heatmap', { cache: 'no-store' })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); })
+      .then(function (j) {
+        state.total = j.total; state.scanned = j.scanned; state.updatedAt = Date.now();
+        state.parcels = (j.parcels || []).map(function (p) { return { x: p.x, y: p.y, t: p.last_scanned ? Date.parse(p.last_scanned) : 0 }; });
+        state.lookup = {};
+        state.parcels.forEach(function (p) { state.lookup[key(p.x, p.y)] = p; });
+        setLive(true);
+        $('err').hidden = true;
+        renderText(); draw();
+      })
+      .catch(function (e) {
+        setLive(false);
+        $('err').hidden = false;
+        $('err').textContent = 'DATA ERROR · ' + e.message;
+      });
+  }
+  function setLive(ok) {
+    $('live').classList.toggle('off', !ok);
+    $('liveText').textContent = ok ? 'LIVE' : 'OFFLINE';
+  }
+
+  /* ---------- text ---------- */
+  function renderText() {
+    $('sTotal').textContent = fmt(state.total);
+    $('sScanned').textContent = fmt(state.scanned);
+    $('sCov').textContent = pct(state.scanned, state.total);
+    $('pScanned').textContent = fmt(state.scanned) + ' / ' + fmt(state.total);
+    $('pCov').textContent = pct(state.scanned, state.total);
+    var dOn = densityOn();
+    $('modeText').textContent = dOn ? 'DENSITY MODE' : 'POINT MODE';
+    $('densBtn').setAttribute('aria-pressed', dOn ? 'true' : 'false');
+
+    var sorted = state.parcels.filter(function (p) { return p.t; }).sort(function (a, b) { return b.t - a.t; });
+    var ul = $('recent'); ul.innerHTML = '';
+    if (!sorted.length) {
+      var li = document.createElement('li'); li.className = 'empty'; li.textContent = 'No scans yet'; ul.appendChild(li);
+    }
+    sorted.slice(0, 8).forEach(function (p) {
+      var li = document.createElement('li');
+      var a = document.createElement('span'); a.textContent = p.x + ',' + p.y;
+      var b = document.createElement('span'); b.className = 't'; b.textContent = hhmm.format(p.t);
+      li.appendChild(a); li.appendChild(b); ul.appendChild(li);
+    });
+    tick();
+  }
+  function tick() {
+    var last = 0;
+    state.parcels.forEach(function (p) { if (p.t > last) last = p.t; });
+    $('lastAgo').textContent = last ? ago(Date.now() - last) : '–';
+    $('lastAt').textContent = last ? kst.format(last) : '–';
+    $('updated').textContent = state.updatedAt ? 'UPDATED ' + hhmm.format(state.updatedAt) + ' KST' : 'UPDATED –';
+  }
+
+  /* ---------- canvas ---------- */
+  function lerp(t) {
+    var r = Math.round(C.lo[0] + (C.hi[0] - C.lo[0]) * t);
+    var g = Math.round(C.lo[1] + (C.hi[1] - C.lo[1]) * t);
+    var b = Math.round(C.lo[2] + (C.hi[2] - C.lo[2]) * t);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + (0.35 + 0.65 * t).toFixed(3) + ')';
+  }
+  function draw() {
+    var stage = $('stage');
+    var cssW = Math.floor(stage.clientWidth);
+    if (!cssW) return;
+    var plot = cssW - PAD.l - PAD.r;
+    var cssH = plot + PAD.t + PAD.b;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
+    canvas.style.height = cssH + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var cell = plot / N;
+    state.geo = { cell: cell, plot: plot };
+    var px = function (x) { return PAD.l + (x - MIN) * cell; };
+    var py = function (y) { return PAD.t + (MAX - y) * cell; };
+
+    ctx.fillStyle = C.map; ctx.fillRect(0, 0, cssW, cssH);
+
+    // 미탐험 셀 (아주 낮은 대비)
+    ctx.fillStyle = C.cell;
+    var gap = cell >= 3 ? 0.6 : 0.35;
+    for (var x = MIN; x <= MAX; x++) for (var y = MIN; y <= MAX; y++) ctx.fillRect(px(x) + gap / 2, py(y) + gap / 2, cell - gap, cell - gap);
+
+    // grid + axis
+    ctx.lineWidth = 1; ctx.font = '10px ' + getComputedStyle(document.body).fontFamily; ctx.fillStyle = C.muted;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (var v = MIN; v <= MAX; v += 50) {
+      var gx = Math.round(PAD.l + (v - MIN + 0.5) * cell) + 0.5;
+      ctx.strokeStyle = v === 0 ? C.axis : C.grid;
+      ctx.beginPath(); ctx.moveTo(gx, PAD.t); ctx.lineTo(gx, PAD.t + plot); ctx.stroke();
+      ctx.fillText(String(v), gx, PAD.t + plot + 6);
+    }
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (var w = MIN; w <= MAX; w += 50) {
+      var gy = Math.round(PAD.t + (MAX - w + 0.5) * cell) + 0.5;
+      ctx.strokeStyle = w === 0 ? C.axis : C.grid;
+      ctx.beginPath(); ctx.moveTo(PAD.l, gy); ctx.lineTo(PAD.l + plot, gy); ctx.stroke();
+      ctx.fillText(String(w), PAD.l - 6, gy);
+    }
+
+    if (densityOn()) {
+      var bins = {};
+      state.parcels.forEach(function (p) {
+        var bx = Math.floor((p.x - MIN) / BIN), by = Math.floor((p.y - MIN) / BIN);
+        var k = bx + ':' + by; bins[k] = (bins[k] || 0) + 1;
+      });
+      Object.keys(bins).forEach(function (k) {
+        var parts = k.split(':'), bx = +parts[0], by = +parts[1];
+        var t = Math.sqrt(Math.min(1, bins[k] / (BIN * BIN)));
+        ctx.fillStyle = lerp(t);
+        var x0 = MIN + bx * BIN, y1 = MIN + by * BIN + BIN - 1;   // 빈의 좌상단 셀
+        ctx.fillRect(px(x0), py(y1), BIN * cell, BIN * cell);
+      });
+    } else {
+      var now = Date.now();
+      var older = [], recent = [];
+      state.parcels.forEach(function (p) { (p.t && now - p.t <= RECENT_MS ? recent : older).push(p); });
+      var size = Math.max(5, cell * 1.8);
+      var drawSet = function (list, color, blur) {
+        ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = blur;
+        list.forEach(function (p) { ctx.fillRect(px(p.x) + cell / 2 - size / 2, py(p.y) + cell / 2 - size / 2, size, size); });
+        ctx.shadowBlur = 0;
+      };
+      drawSet(older, C.scan, 8);
+      drawSet(recent, C.recent, 14);
+    }
+  }
+
+  /* ---------- hover ---------- */
+  var stage = $('stage'), tip = $('tip'), box = $('cursorbox');
+  function cellAt(e) {
+    var g = state.geo; if (!g) return null;
+    var r = canvas.getBoundingClientRect();
+    var mx = e.clientX - r.left, my = e.clientY - r.top;
+    var cx = Math.floor((mx - PAD.l) / g.cell), cy = Math.floor((my - PAD.t) / g.cell);
+    if (cx < 0 || cy < 0 || cx >= N || cy >= N) return null;
+    return { x: MIN + cx, y: MAX - cy, mx: mx, my: my };
+  }
+  stage.addEventListener('pointermove', function (e) {
+    var c = cellAt(e);
+    if (!c) { tip.style.display = 'none'; box.style.display = 'none'; return; }
+    var g = state.geo;
+    var p = state.lookup[key(c.x, c.y)];
+    box.style.display = 'block';
+    box.style.left = (PAD.l + (c.x - MIN) * g.cell) + 'px';
+    box.style.top = (PAD.t + (MAX - c.y) * g.cell) + 'px';
+    box.style.width = Math.max(g.cell, 4) + 'px'; box.style.height = Math.max(g.cell, 4) + 'px';
+    tip.innerHTML = '';
+    var add = function (k, v, cls) {
+      var a = document.createElement('div'); a.className = 'k'; a.textContent = k;
+      var b = document.createElement('div'); b.textContent = v; if (cls) b.className = cls;
+      tip.appendChild(a); tip.appendChild(b);
+    };
+    add('PARCEL', c.x + ',' + c.y);
+    add('STATUS', p ? 'SCANNED' : 'UNSCANNED', p ? 's-on' : 's-off');
+    if (p && p.t) add('LAST SCAN', kst.format(p.t) + ' KST');
+    tip.style.display = 'block';
+    var tw = tip.offsetWidth, sw = stage.clientWidth;
+    var left = c.mx + 14; if (left + tw > sw) left = c.mx - tw - 14;
+    var top = c.my + 14; if (top + tip.offsetHeight > stage.clientHeight) top = c.my - tip.offsetHeight - 14;
+    tip.style.left = Math.max(0, left) + 'px'; tip.style.top = Math.max(0, top) + 'px';
+  });
+  stage.addEventListener('pointerleave', function () { tip.style.display = 'none'; box.style.display = 'none'; });
+
+  /* ---------- controls ---------- */
+  $('densBtn').addEventListener('click', function () {
+    state.densityPref = densityOn() ? 'off' : 'on';
+    renderText(); draw();
+  });
+  $('refresh').addEventListener('click', load);
+  window.addEventListener('resize', draw);
+  setInterval(tick, 15000);
+  setInterval(function () { if (!document.hidden) load(); }, 60000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
+
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  draw();
+  load();
+})();
+</script>
+</body>
+</html>
