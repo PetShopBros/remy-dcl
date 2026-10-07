@@ -17,7 +17,7 @@ jobs:
             if [ "$OK" = "true" ]; then
               ID=$(echo $RESULT | jq -r '.parcel.id')
               echo "[$i] Exploring: $ID"
-              curl -sf "https://remy-dcl-relay-roan.vercel.app/api/explore-complete?id=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$ID'))")"
+              curl -sf "https://remy-dcl-relay-roan.vercel.app/api/explore-complete?id=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$ID'))")&agent=remy1"
             else
               echo "[$i] No parcels"
               break

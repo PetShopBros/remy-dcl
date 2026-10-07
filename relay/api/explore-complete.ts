@@ -18,12 +18,14 @@ export default async function handler(req: Request) {
     .eq('id', id)
 
   // Lowdown 기록
-  await supabase.from('interactions').insert({
-    actor: 'remy',
+  const agent = url.searchParams.get('agent') ?? 'remy'
+  const { error: logError } = await supabase.from('interactions').insert({
+    actor: agent,
     task_type: 'explore',
     target: `dcl:${id}`,
+    target_type: 'service',
     outcome: 'success',
   })
 
-  return Response.json({ ok: !error }, { headers: cors })
+  return Response.json({ ok: !error, logged: !logError, logError: logError?.message }, { headers: cors })
 }
