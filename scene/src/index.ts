@@ -3,6 +3,7 @@ import { engine, Transform, TextShape, Billboard, BillboardMode, MeshCollider, P
 import { Vector3 } from '@dcl/sdk/math'
 import { buildObservatory } from './observatory'
 import { buildScannerScreen } from './scannerScreen'
+import { buildSlate } from './slate'
 
 const MENU_ITEMS: { label: string; intent: 'FOLLOW' | 'STOP' | 'EXPLORE' | 'STATUS' | 'EMOTE' | 'REPORT' }[] = [
   { label: '[ FOLLOW ]',  intent: 'FOLLOW'  },
@@ -156,6 +157,7 @@ engine.addSystem(() => {
 export function main() {
   buildObservatory()
   buildScannerScreen()
+  buildSlate()
   buildMenu()
   setupRemy(8, 8, () => { setMenuVisible(!menuVisible) })
 }

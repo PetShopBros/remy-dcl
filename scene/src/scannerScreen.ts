@@ -21,6 +21,14 @@ const MAP_ROTATION = Quaternion.fromEulerDegrees(90, 0, 0)
 
 const TERMINAL_X = 29.5       // 지도 동쪽
 const REFRESH_SECONDS = 300
+const NEAR_DISTANCE = 9       // 이 거리 안에 들어오면 클릭 안내를 띄운다
+
+const LABEL_DEFAULT = 'CLICK > FULL SCANNER'
+const LABEL_OPENING = 'OPENING...'
+const PROMPT_TEXT = 'CLICK THE GLOWING PANEL\nTO OPEN THE LIVE MAP'
+
+const DARK_TEXT = Color4.create(0.03, 0.04, 0.05, 1)
+const OUTLINE = Color3.create(0.03, 0.04, 0.05)
 
 let board: Entity
 let map: Entity
@@ -83,7 +91,7 @@ export function buildScannerScreen() {
   const north = engine.addEntity()
   Transform.create(north, { position: Vector3.create(MAP_CX, 0.9, MAP_CZ + h + 1.0) })
   Billboard.create(north, { billboardMode: BillboardMode.BM_Y })
-  TextShape.create(north, { text: 'N', fontSize: 4, textColor: Color4.create(0.42, 1, 0.94, 1), outlineWidth: 0.1, outlineColor: Color3.create(0.03, 0.04, 0.05) })
+  TextShape.create(north, { text: 'N', fontSize: 4, textColor: Color4.create(0.42, 1, 0.94, 1), outlineWidth: 0.1, outlineColor: OUTLINE })
 
   // 레이더 스윕: 지도 위를 도는 얇은 빛 막대
   const sweep = box(
@@ -94,32 +102,91 @@ export function buildScannerScreen() {
   // ── 단말기: 지도 동쪽 ──
   box(Vector3.create(TERMINAL_X, 0.55, MAP_CZ), Vector3.create(1.0, 1.1, 3.0), PANEL, { collide: true })
   box(Vector3.create(TERMINAL_X, 1.12, MAP_CZ), Vector3.create(1.04, 0.05, 3.04), MINT)
-  const button = box(Vector3.create(TERMINAL_X - 0.51, 0.7, MAP_CZ), Vector3.create(0.04, 0.5, 2.4), MINT)
+
+  // 클릭 버튼 (지도를 향한 서쪽 면)
+  const BTN_Y = 0.7
+  const BTN_BASE = Vector3.create(0.04, 0.5, 2.4)
+  const button = box(Vector3.create(TERMINAL_X - 0.51, BTN_Y, MAP_CZ), BTN_BASE, MINT)
   MeshCollider.setBox(button)
+
+  // 1) 버튼 면 글자 (Billboard 라서 어느 쪽에서 봐도 읽힌다)
+  const label = engine.addEntity()
+  Transform.create(label, { position: Vector3.create(TERMINAL_X - 0.58, BTN_Y, MAP_CZ) })
+  Billboard.create(label, { billboardMode: BillboardMode.BM_Y })
+  TextShape.create(label, { text: LABEL_DEFAULT, fontSize: 1.1, textColor: DARK_TEXT })
+
+  // 2) 버튼 위에서 아래로 가리키는 화살표 (원뿔을 뒤집은 것)
+  const ARROW_BASE_Y = 1.55
+  const arrow = engine.addEntity()
+  Transform.create(arrow, {
+    position: Vector3.create(TERMINAL_X - 0.51, ARROW_BASE_Y, MAP_CZ),
+    scale: Vector3.create(0.4, 0.55, 0.4),
+    rotation: Quaternion.fromEulerDegrees(180, 0, 0),
+  })
+  MeshRenderer.setCylinder(arrow, 0.5, 0)
+  Material.setPbrMaterial(arrow, AQUA)
+
+  // 3) 가까이 오면 뜨는 안내 문구
+  const prompt = engine.addEntity()
+  Transform.create(prompt, { position: Vector3.create(TERMINAL_X - 0.51, 2.35, MAP_CZ) })
+  Billboard.create(prompt, { billboardMode: BillboardMode.BM_Y })
+  TextShape.create(prompt, { text: '', fontSize: 0.9, textColor: Color4.create(0.42, 1, 0.94, 1), outlineWidth: 0.1, outlineColor: OUTLINE })
+  let promptShown = false
+
+  // 4) 클릭 피드백: 버튼이 번쩍이고 글자가 OPENING... 으로 바뀐다
+  let flashUntil = 0
+  let openingUntil = 0
+  let t = 0
   pointerEventsSystem.onPointerDown(
     { entity: button, opts: { button: InputAction.IA_POINTER, hoverText: 'OPEN FULL SCANNER', maxDistance: 12 } },
-    () => { void openExternalUrl({ url: SCANNER_PAGE }) }
+    () => {
+      flashUntil = t + 0.3
+      openingUntil = t + 3
+      TextShape.getMutable(label).text = LABEL_OPENING
+      void openExternalUrl({ url: SCANNER_PAGE })
+    }
   )
 
+  // 숫자 보드
   board = engine.addEntity()
-  Transform.create(board, { position: Vector3.create(TERMINAL_X, 3.1, MAP_CZ) })
+  Transform.create(board, { position: Vector3.create(TERMINAL_X, 4.0, MAP_CZ) })
   Billboard.create(board, { billboardMode: BillboardMode.BM_Y })
   TextShape.create(board, {
     text: 'WORLD SCANNER\n\nLOADING...',
     fontSize: 1.6,
     textColor: Color4.create(0, 0.9, 0.63, 1),
     outlineWidth: 0.1,
-    outlineColor: Color3.create(0.03, 0.04, 0.05),
+    outlineColor: OUTLINE,
   })
 
   void refresh()
 
-  let t = 0
   let sinceRefresh = 0
   engine.addSystem((dt: number) => {
     t += dt
     sinceRefresh += dt
+
     Transform.getMutable(sweep).rotation = Quaternion.fromEulerDegrees(0, (t * 40) % 360, 0)
+
+    // 2) 버튼 숨쉬기 + 클릭 순간 번쩍임, 화살표 위아래
+    const pulse = t < flashUntil ? 1.18 : 1 + 0.04 * Math.sin(t * 3)
+    Transform.getMutable(button).scale = Vector3.create(BTN_BASE.x, BTN_BASE.y * pulse, BTN_BASE.z * pulse)
+    Transform.getMutable(arrow).position.y = ARROW_BASE_Y + 0.12 * Math.sin(t * 4)
+
+    // 4) OPENING... 을 3초 뒤 원래 글자로
+    if (openingUntil > 0 && t >= openingUntil) {
+      openingUntil = 0
+      TextShape.getMutable(label).text = LABEL_DEFAULT
+    }
+
+    // 3) 근접 안내
+    const player = Transform.getOrNull(engine.PlayerEntity)
+    const near = player ? Math.hypot(player.position.x - TERMINAL_X, player.position.z - MAP_CZ) < NEAR_DISTANCE : false
+    if (near !== promptShown) {
+      promptShown = near
+      TextShape.getMutable(prompt).text = near ? PROMPT_TEXT : ''
+    }
+
     if (sinceRefresh >= REFRESH_SECONDS) {
       sinceRefresh = 0
       void refresh()

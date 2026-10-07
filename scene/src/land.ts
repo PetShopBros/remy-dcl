@@ -43,6 +43,9 @@ export const KEEP_OUT: ReadonlyArray<{ x: number; z: number; r: number }> = [
   { x: 2, z: 0, r: 1.3 },     // 게이트 기둥
   { x: 14, z: 0, r: 1.3 },    // 게이트 기둥
   { x: 29.5, z: 16, r: 2.2 }, // 단말기 (scannerScreen.ts)
+  { x: -5.4, z: -11.5, r: 2.4 }, // 제품 모니터 3개 (slate.ts: 타워 기준 반경 7m, -50/0/50도)
+  { x: 0, z: -9, r: 2.4 },
+  { x: 5.4, z: -11.5, r: 2.4 },
 ]
 
 /** 땅 안쪽이고 건물과 겹치지 않는 자리인지 (Remy 이동용) */
