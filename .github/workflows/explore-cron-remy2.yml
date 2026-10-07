@@ -1,0 +1,25 @@
+name: Remy2 Explore Cron
+
+on:
+  schedule:
+    - cron: '1-59/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explore 10 parcels
+        run: |
+          for i in $(seq 1 10); do
+            RESULT=$(curl -sf "https://remy-dcl-relay-roan.vercel.app/api/explore-next?agent=remy2")
+            OK=$(echo $RESULT | jq -r '.ok')
+            if [ "$OK" = "true" ]; then
+              ID=$(echo $RESULT | jq -r '.parcel.id')
+              echo "[$i] Exploring: $ID"
+              curl -sf "https://remy-dcl-relay-roan.vercel.app/api/explore-complete?id=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$ID'))")&agent=remy2"
+            else
+              echo "[$i] No parcels"
+              break
+            fi
+          done
