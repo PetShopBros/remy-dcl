@@ -1,4 +1,5 @@
 ﻿import { engine, Transform, Animator, GltfContainer, TextShape, Billboard, BillboardMode, Entity, PointerEvents, PointerEventType, InputAction, MeshCollider, MeshRenderer, inputSystem } from '@dcl/sdk/ecs'
+import { isOnLand, isWalkable } from './land'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
 
 export const RELAY_URL = (globalThis as any).REMY_RELAY_URL ?? 'https://remy-dcl-relay-roan.vercel.app'
@@ -33,7 +34,7 @@ let clickCallback:    (() => void) | null = null
 
 export function setClickCallback(cb: () => void) { clickCallback = cb }
 
-const PARCEL_BOUNDS = { minX: -22, maxX: 38, minZ: -30, maxZ: 30 }
+const EDGE_MARGIN = 1.5   // 땅 경계에서 이만큼 안쪽까지만 걷는다 (land.ts 의 실제 파셀 모양 기준)
 const MAX_STEP = 8
 
 export function getRemyEntity() { return remyEntity }
@@ -157,8 +158,7 @@ function remySystem(dt: number) {
     } else {
       const px = player.position.x
       const pz = player.position.z
-      const inBounds = px >= PARCEL_BOUNDS.minX && px <= PARCEL_BOUNDS.maxX &&
-                       pz >= PARCEL_BOUNDS.minZ && pz <= PARCEL_BOUNDS.maxZ
+      const inBounds = isOnLand(px, pz)
       if (!inBounds) {
         phase = 'exploring'
         startExplore()
@@ -227,11 +227,12 @@ function easeInOut(t: number) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t }
 function randomInBounds() {
   if (!remyEntity) return { x: 8, z: 8 }
   const tf = Transform.get(remyEntity)
-  const dx = (Math.random() - 0.5) * 2 * MAX_STEP
-  const dz = (Math.random() - 0.5) * 2 * MAX_STEP
-  const x = Math.max(PARCEL_BOUNDS.minX, Math.min(PARCEL_BOUNDS.maxX, tf.position.x + dx))
-  const z = Math.max(PARCEL_BOUNDS.minZ, Math.min(PARCEL_BOUNDS.maxZ, tf.position.z + dz))
-  return { x, z }
+  for (let i = 0; i < 20; i++) {
+    const x = tf.position.x + (Math.random() - 0.5) * 2 * MAX_STEP
+    const z = tf.position.z + (Math.random() - 0.5) * 2 * MAX_STEP
+    if (isWalkable(x, z, EDGE_MARGIN)) return { x, z }
+  }
+  return { x: 8, z: 8 }
 }
 
 function parcelFromPos(x: number, z: number): string {
