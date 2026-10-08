@@ -65,6 +65,12 @@
   .mapbar b { color: var(--text); font-weight: 500; }
   .stage { position: relative; width: 100%; }
   canvas { display: block; width: 100%; background: var(--map); cursor: crosshair; }
+  .clip { position: absolute; overflow: hidden; pointer-events: none; }
+  .zoomctl { position: absolute; z-index: 3; display: flex; align-items: center; gap: 4px; }
+  .zoomctl button { width: 30px; height: 30px; padding: 0; background: rgba(16,22,29,.88); color: var(--text); border: 1px solid var(--grid); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+  .zoomctl button.wide { width: auto; padding: 0 8px; font-size: 10px; letter-spacing: .14em; }
+  .zoomctl button:hover { border-color: var(--content); color: var(--content); }
+  .zoomctl .zl { min-width: 38px; text-align: center; font-size: 10px; letter-spacing: .1em; color: var(--muted); background: rgba(16,22,29,.88); border: 1px solid var(--grid); height: 30px; line-height: 28px; }
   .cursorbox { position: absolute; pointer-events: none; border: 1px solid var(--ring); box-shadow: 0 0 6px rgba(244,255,253,.5); display: none; }
   .tip {
     position: absolute; pointer-events: none; display: none; z-index: 2; min-width: 150px;
@@ -164,11 +170,16 @@
       </div>
       <div class="stage" id="stage">
         <canvas id="map" aria-label="DCL world map: parcels with content, templates, roads, empty land and unverified land"></canvas>
-        <div class="cursorbox" id="cursorbox"></div>
-        <div class="selbox" id="selbox"></div>
+        <div class="clip" id="clip"><div class="cursorbox" id="cursorbox"></div><div class="selbox" id="selbox"></div></div>
+        <div class="zoomctl" id="zoomctl">
+          <button type="button" id="zIn" aria-label="Zoom in">+</button>
+          <button type="button" id="zOut" aria-label="Zoom out">−</button>
+          <button type="button" id="zFit" class="wide" aria-label="Show the whole world" title="Show the whole world">1:1</button>
+          <span class="zl" id="zLabel">1×</span>
+        </div>
         <div class="tip" id="tip"></div>
       </div>
-      <div class="hint">CLICK A PARCEL FOR DETAILS AND LOWDOWN HISTORY</div>
+      <div class="hint">CLICK A PARCEL FOR DETAILS AND LOWDOWN HISTORY · SCROLL OR PINCH TO ZOOM · DRAG TO PAN</div>
       <div class="legend" id="legend">
         <span><i class="l-content"></i>CONTENT</span>
         <span><i class="l-template"></i>TEMPLATE / EMPTY SCENE</span>
@@ -222,6 +233,8 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var canvas = $('map'), ctx = canvas.getContext('2d');
+  var MAX_ZOOM = 16;
+  var view = { z: 1, fx: 0, fy: 0 };   // fx, fy: 지도 왼쪽/위 가장자리의 이동량 (plot 한 변 길이 대비 비율, 0 이하)
   var state = { snap: null, cells: null, W: 0, H: 0, minX: -150, maxY: 150, ring: true, geo: null, updatedAt: null };
 
   var fmt = function (n) { return Number(n).toLocaleString('en-US'); };
@@ -302,6 +315,16 @@
   }
 
   /* ---------- canvas ---------- */
+  function clampView() {
+    var m = 1 - view.z;
+    view.fx = Math.min(0, Math.max(m, view.fx));
+    view.fy = Math.min(0, Math.max(m, view.fy));
+  }
+  function niceStep(cell) {
+    var steps = [1, 2, 5, 10, 25, 50];
+    for (var i = 0; i < steps.length; i++) if (steps[i] * cell >= 64) return steps[i];
+    return 50;
+  }
   function draw() {
     var stage = $('stage');
     var cssW = Math.floor(stage.clientWidth);
@@ -313,59 +336,118 @@
     canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);
     canvas.style.height = cssH + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    var cell = plot / N;
-    state.geo = { cell: cell, plot: plot, N: N };
-    var px = function (cx) { return PAD.l + cx * cell; };
-    var py = function (cy) { return PAD.t + cy * cell; };
+    clampView();
+    var cell = plot / N * view.z;
+    var ox = view.fx * plot, oy = view.fy * plot;
+    state.geo = { cell: cell, plot: plot, N: N, z: view.z, ox: ox, oy: oy };
+    var clip = $('clip');
+    clip.style.left = PAD.l + 'px'; clip.style.top = PAD.t + 'px'; clip.style.width = plot + 'px'; clip.style.height = plot + 'px';
+    var px = function (cx) { return PAD.l + ox + cx * cell; };
+    var py = function (cy) { return PAD.t + oy + cy * cell; };
 
     ctx.fillStyle = C.map; ctx.fillRect(0, 0, cssW, cssH);
     ctx.fillStyle = C.none; ctx.fillRect(PAD.l, PAD.t, plot, plot);
 
-    // grid + axis (50칸마다)
-    ctx.lineWidth = 1; ctx.font = '10px ' + getComputedStyle(document.body).fontFamily; ctx.fillStyle = C.muted;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    for (var v = -150; v <= 150; v += 50) {
-      var gx = Math.round(PAD.l + (v - state.minX + 0.5) * cell) + 0.5;
+    // 보이는 칸 범위
+    var c0 = Math.max(0, Math.floor(-ox / cell)), c1 = Math.min(N - 1, Math.floor((plot - ox) / cell));
+    var r0 = Math.max(0, Math.floor(-oy / cell)), r1 = Math.min(N - 1, Math.floor((plot - oy) / cell));
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(PAD.l, PAD.t, plot, plot); ctx.clip();
+
+    // 격자선 (확대 정도에 맞춰 간격 조정)
+    var step = niceStep(cell);
+    ctx.lineWidth = 1;
+    var xs = [], ys = [];
+    var vx0 = Math.ceil((state.minX + c0) / step) * step;
+    for (var v = vx0; v <= state.minX + c1; v += step) xs.push(v);
+    var vy0 = Math.ceil((state.maxY - r1) / step) * step;
+    for (var w = vy0; w <= state.maxY - r0; w += step) ys.push(w);
+    xs.forEach(function (v) {
+      var gx = Math.round(px(v - state.minX + 0.5)) + 0.5;
       ctx.strokeStyle = v === 0 ? C.axis : C.grid;
       ctx.beginPath(); ctx.moveTo(gx, PAD.t); ctx.lineTo(gx, PAD.t + plot); ctx.stroke();
-      ctx.fillText(String(v), gx, PAD.t + plot + 6);
-    }
-    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    for (var w = -150; w <= 150; w += 50) {
-      var gy = Math.round(PAD.t + (state.maxY - w + 0.5) * cell) + 0.5;
+    });
+    ys.forEach(function (w) {
+      var gy = Math.round(py(state.maxY - w + 0.5)) + 0.5;
       ctx.strokeStyle = w === 0 ? C.axis : C.grid;
       ctx.beginPath(); ctx.moveTo(PAD.l, gy); ctx.lineTo(PAD.l + plot, gy); ctx.stroke();
-      ctx.fillText(String(w), PAD.l - 6, gy);
-    }
+    });
 
     var cells = state.cells;
-    if (!cells) return;
-    var gap = cell >= 3 ? 0.4 : 0;
-    var colors = [null, C.content, C.template, C.road, C.unknown];
-    // 색깔별로 한 번씩 (fillStyle 교체 최소화)
-    for (var base = 1; base <= 4; base++) {
-      ctx.fillStyle = colors[base];
-      if (base === 4) ctx.globalAlpha = 0.85;
-      for (var i = 0; i < cells.length; i++) {
-        var c = cells[i] % 5;
-        if (c !== base) continue;
-        ctx.fillRect(px(i % N) + gap / 2, py((i / N) | 0) + gap / 2, cell - gap, cell - gap);
+    if (cells) {
+      var gap = cell >= 3 ? Math.min(1.2, Math.max(0.4, cell * 0.06)) : 0;
+      var colors = [null, C.content, C.template, C.road, C.unknown];
+      // 색깔별로 한 번씩 (fillStyle 교체 최소화)
+      for (var base = 1; base <= 4; base++) {
+        ctx.fillStyle = colors[base];
+        if (base === 4) ctx.globalAlpha = 0.85;
+        for (var ry = r0; ry <= r1; ry++) {
+          var rowStart = ry * N;
+          for (var rx = c0; rx <= c1; rx++) {
+            if (cells[rowStart + rx] % 5 !== base) continue;
+            ctx.fillRect(px(rx) + gap / 2, py(ry) + gap / 2, cell - gap, cell - gap);
+          }
+        }
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
-    }
 
-    // 최근 변경: 칸 색은 그대로 두고 테두리/빛만 덧그린다
-    if (state.ring) {
-      var lw = Math.max(1, cell * 0.3);
-      ctx.strokeStyle = C.ring; ctx.lineWidth = lw; ctx.shadowColor = C.ring; ctx.shadowBlur = 6;
-      for (var j = 0; j < cells.length; j++) {
-        if (cells[j] < 5) continue;
-        var rx = px(j % N), ry = py((j / N) | 0);
-        ctx.strokeRect(rx - lw / 2, ry - lw / 2, cell + lw, cell + lw);
+      // 최근 변경: 칸 색은 그대로 두고 테두리/빛만 덧그린다
+      if (state.ring) {
+        var lw = Math.min(3, Math.max(1, cell * 0.3));
+        ctx.strokeStyle = C.ring; ctx.lineWidth = lw; ctx.shadowColor = C.ring; ctx.shadowBlur = 6;
+        for (var jy = r0; jy <= r1; jy++) {
+          for (var jx = c0; jx <= c1; jx++) {
+            if (cells[jy * N + jx] < 5) continue;
+            ctx.strokeRect(px(jx) - lw / 2, py(jy) - lw / 2, cell + lw, cell + lw);
+          }
+        }
+        ctx.shadowBlur = 0;
       }
-      ctx.shadowBlur = 0;
     }
+    ctx.restore();
+
+    // 눈금 글자 (지도 바깥쪽)
+    ctx.font = '10px ' + getComputedStyle(document.body).fontFamily; ctx.fillStyle = C.muted;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    xs.forEach(function (v) {
+      var gx = Math.round(px(v - state.minX + 0.5)) + 0.5;
+      if (gx < PAD.l + 8 || gx > PAD.l + plot - 8) return;
+      ctx.fillText(String(v), gx, PAD.t + plot + 6);
+    });
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    ys.forEach(function (w) {
+      var gy = Math.round(py(state.maxY - w + 0.5)) + 0.5;
+      if (gy < PAD.t + 6 || gy > PAD.t + plot - 6) return;
+      ctx.fillText(String(w), PAD.l - 6, gy);
+    });
+
+    var zc = $('zoomctl');
+    zc.style.top = (PAD.t + 6) + 'px'; zc.style.right = (PAD.r + 6) + 'px';
+    $('zLabel').textContent = (view.z < 10 ? view.z.toFixed(1).replace('.0', '') : Math.round(view.z)) + '×';
+    stage.style.touchAction = view.z > 1.001 ? 'none' : 'pan-y';
+    canvas.style.cursor = view.z > 1.001 ? 'grab' : 'crosshair';
   }
+
+  // 지도 전체를 다시 그리고 선택 박스를 맞춘다
+  function refresh() {
+    draw();
+    if (typeof placeSel === 'function') placeSel();
+    tip.style.display = 'none'; box.style.display = 'none';
+  }
+  // ax, ay: 지도(plot) 왼쪽 위 기준 화면 좌표. 이 점 아래의 칸이 그대로 있도록 확대한다.
+  function setZoom(z, ax, ay) {
+    var g = state.geo; if (!g) return;
+    z = Math.min(MAX_ZOOM, Math.max(1, z));
+    if (z === view.z) return;
+    var u = (ax - view.fx * g.plot) / (g.plot * view.z);
+    var v = (ay - view.fy * g.plot) / (g.plot * view.z);
+    view.fx = (ax - u * g.plot * z) / g.plot;
+    view.fy = (ay - v * g.plot * z) / g.plot;
+    view.z = z;
+    refresh();
+  }
+  function resetView() { view.z = 1; view.fx = 0; view.fy = 0; refresh(); }
 
   /* ---------- hover ---------- */
   var stage = $('stage'), tip = $('tip'), box = $('cursorbox');
@@ -373,19 +455,23 @@
     var g = state.geo; if (!g || !state.cells) return null;
     var r = canvas.getBoundingClientRect();
     var mx = e.clientX - r.left, my = e.clientY - r.top;
-    var cx = Math.floor((mx - PAD.l) / g.cell), cy = Math.floor((my - PAD.t) / g.cell);
+    var lx = mx - PAD.l, ly = my - PAD.t;
+    if (lx < 0 || ly < 0 || lx >= g.plot || ly >= g.plot) return null;
+    var cx = Math.floor((lx - g.ox) / g.cell), cy = Math.floor((ly - g.oy) / g.cell);
     if (cx < 0 || cy < 0 || cx >= g.N || cy >= g.N) return null;
     return { cx: cx, cy: cy, x: state.minX + cx, y: state.maxY - cy, mx: mx, my: my };
   }
   stage.addEventListener('pointermove', function (e) {
+    if (panning || pinch) return;
+    if (e.target.closest && e.target.closest('.zoomctl')) { tip.style.display = 'none'; box.style.display = 'none'; return; }
     var c = cellAt(e);
     if (!c) { tip.style.display = 'none'; box.style.display = 'none'; return; }
     var g = state.geo;
     var code = state.cells[c.cy * g.N + c.cx];
     var base = code % 5, recent = code >= 5;
     box.style.display = 'block';
-    box.style.left = (PAD.l + c.cx * g.cell) + 'px';
-    box.style.top = (PAD.t + c.cy * g.cell) + 'px';
+    box.style.left = (g.ox + c.cx * g.cell) + 'px';
+    box.style.top = (g.oy + c.cy * g.cell) + 'px';
     box.style.width = Math.max(g.cell, 4) + 'px'; box.style.height = Math.max(g.cell, 4) + 'px';
     tip.innerHTML = '';
     var add = function (k, v, cls) {
@@ -427,8 +513,8 @@
     var box = $('selbox'), g = state.geo;
     if (!sel || !g) { box.style.display = 'none'; return; }
     box.style.display = 'block';
-    box.style.left = (PAD.l + (sel.x - state.minX) * g.cell) + 'px';
-    box.style.top = (PAD.t + (state.maxY - sel.y) * g.cell) + 'px';
+    box.style.left = (g.ox + (sel.x - state.minX) * g.cell) + 'px';
+    box.style.top = (g.oy + (state.maxY - sel.y) * g.cell) + 'px';
     box.style.width = Math.max(g.cell, 5) + 'px'; box.style.height = Math.max(g.cell, 5) + 'px';
   }
   function setHash(x, y) {
@@ -511,10 +597,102 @@
     a.target = '_blank'; a.rel = 'noopener noreferrer';
     body.appendChild(a);
   }
+  /* ---------- zoom / pan / click ---------- */
+  var panning = false, pinch = null, drag = null, suppress = false, prevSel = null;
+  function holdClick() { suppress = true; setTimeout(function () { suppress = false; }, 40); }
+  function inCtl(e) { return e.target && e.target.closest && e.target.closest('.zoomctl'); }
+  function plotPoint(clientX, clientY) {
+    var r = canvas.getBoundingClientRect();
+    return { x: clientX - r.left - PAD.l, y: clientY - r.top - PAD.t };
+  }
+
   stage.addEventListener('click', function (e) {
+    if (inCtl(e) || suppress) return;
     var c = cellAt(e); if (!c) return;
+    if (e.detail < 2) prevSel = sel ? { x: sel.x, y: sel.y } : null;
     selectParcel(c.x, c.y);
   });
+  stage.addEventListener('dblclick', function (e) {
+    if (inCtl(e)) return;
+    var p = plotPoint(e.clientX, e.clientY);
+    setZoom(view.z * 2, p.x, p.y);
+    // 더블클릭의 두 번 클릭으로 바뀐 선택을 원래대로 돌려놓는다
+    if (prevSel) selectParcel(prevSel.x, prevSel.y); else if (sel) clearParcel();
+  });
+
+  stage.addEventListener('wheel', function (e) {
+    var g = state.geo; if (!g) return;
+    e.preventDefault();
+    var dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    var p = plotPoint(e.clientX, e.clientY);
+    setZoom(view.z * Math.exp(-dy * 0.0015), p.x, p.y);
+  }, { passive: false });
+
+  stage.addEventListener('pointerdown', function (e) {
+    if (inCtl(e) || pinch) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, fx: view.fx, fy: view.fy, moved: false };
+  });
+  stage.addEventListener('pointermove', function (e) {
+    if (!drag || drag.id !== e.pointerId || pinch) return;
+    var dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved) {
+      if (view.z <= 1.001 || Math.hypot(dx, dy) < 6) return;
+      drag.moved = true; panning = true;
+      try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+      canvas.style.cursor = 'grabbing';
+      tip.style.display = 'none'; box.style.display = 'none';
+    }
+    var g = state.geo;
+    view.fx = drag.fx + dx / g.plot; view.fy = drag.fy + dy / g.plot;
+    draw(); placeSel();
+  });
+  function endDrag(e) {
+    if (!drag || drag.id !== e.pointerId) return;
+    if (drag.moved) { holdClick(); canvas.style.cursor = view.z > 1.001 ? 'grab' : 'crosshair'; }
+    drag = null; panning = false;
+  }
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  // 모바일 핀치 (두 손가락). 한 손가락 드래그는 위의 pointer 처리, 지도 1배일 때는 페이지 스크롤.
+  function touchPair(t) {
+    var a = t[0], b = t[1];
+    return { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2 };
+  }
+  stage.addEventListener('touchstart', function (e) {
+    if (e.touches.length !== 2 || inCtl(e)) return;
+    if (e.cancelable) e.preventDefault();
+    var t = touchPair(e.touches), p = plotPoint(t.cx, t.cy), g = state.geo; if (!g) return;
+    pinch = {
+      d0: Math.max(t.d, 1), z0: view.z,
+      u: (p.x - view.fx * g.plot) / (g.plot * view.z), v: (p.y - view.fy * g.plot) / (g.plot * view.z)
+    };
+    drag = null; panning = false; holdClick();
+    tip.style.display = 'none'; box.style.display = 'none';
+  }, { passive: false });
+  stage.addEventListener('touchmove', function (e) {
+    if (!pinch || e.touches.length !== 2) return;
+    if (e.cancelable) e.preventDefault();
+    var t = touchPair(e.touches), p = plotPoint(t.cx, t.cy), g = state.geo; if (!g) return;
+    var z = Math.min(MAX_ZOOM, Math.max(1, pinch.z0 * t.d / pinch.d0));
+    view.z = z;
+    view.fx = (p.x - pinch.u * g.plot * z) / g.plot;
+    view.fy = (p.y - pinch.v * g.plot * z) / g.plot;
+    draw(); placeSel();
+  }, { passive: false });
+  function endPinch(e) {
+    if (!pinch) return;
+    if (e.touches.length < 2) { pinch = null; holdClick(); drag = null; panning = false; }
+  }
+  stage.addEventListener('touchend', endPinch);
+  stage.addEventListener('touchcancel', endPinch);
+
+  // 버튼 (지도 가운데 기준)
+  function ctlZoom(f) { var g = state.geo; if (g) setZoom(view.z * f, g.plot / 2, g.plot / 2); }
+  $('zIn').addEventListener('click', function () { ctlZoom(1.6); });
+  $('zOut').addEventListener('click', function () { ctlZoom(1 / 1.6); });
+  $('zFit').addEventListener('click', resetView);
   $('pclose').addEventListener('click', clearParcel);
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && sel) clearParcel(); });
 
