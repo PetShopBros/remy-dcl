@@ -8,7 +8,7 @@
 //
 // 규칙
 //  - 조회 대상 좌표는 DB 의 parcels 에 있는 id 전부다 (격자 크기를 가정하지 않는다).
-//  - 묶음 요청이 끝내 실패하면 그 좌표들의 기존 값은 건드리지 않는다 (지도가 깜빡이지 않게).
+//  - 묶음 요청이 하나라도 끝내 실패하면 DB 는 건드리지 않고(실행 기록만 남김) 종료 코드 2 로 끝낸다.
 //  - parcels 는 상태가 바뀐 행만 쓴다. "마지막으로 전체를 확인한 시각"은 scanner_runs 에 남는다.
 
 const CATALYST = (process.env.CATALYST ?? 'https://peer.decentraland.org') + '/content'
@@ -148,19 +148,19 @@ function tileModes(parcels, scan) {
 }
 
 async function readSceneKinds() {
-  const out = new Map()
+  const kinds = new Map(), titles = new Map()
   for (let off = 0; ; off += DB_PAGE) {
     let rows
     try {
-      rows = await sbGet(`catalyst_scenes?select=entity_id,kind&order=entity_id&limit=${DB_PAGE}&offset=${off}`)
+      rows = await sbGet(`catalyst_scenes?select=entity_id,kind,title&order=entity_id&limit=${DB_PAGE}&offset=${off}`)
     } catch (e) {
       if (/kind/.test(String(e.message))) throw new Error('catalyst_scenes 에 kind 컬럼이 없습니다. 먼저 scanner/002_scene_kind.sql 을 실행하세요.\n' + e.message)
       throw e
     }
-    for (const r of rows) out.set(r.entity_id, r.kind ?? null)
+    for (const r of rows) { kinds.set(r.entity_id, r.kind ?? null); titles.set(r.entity_id, r.title ?? null) }
     if (rows.length < DB_PAGE) break
   }
-  return out
+  return { kinds, titles }
 }
 
 // ── 2-2) 지도 스냅샷 ──────────────────────────────────────────
@@ -219,6 +219,101 @@ function buildSnapshot(parcels, scan, kinds, dbKinds, nowMs) {
     recent: { scenes: recentEntities.size, parcels: recentParcels },
   }
   return { codes, stats, width: GRID_W, height: GRID_W, min_x: GRID_MIN, max_y: GRID_MAX }
+}
+
+// ── 2-3) 변화 이벤트 (world_events) ───────────────────────────
+// 스캔 전 DB 상태(parcels.entity_id/state)와 이번 스캔 결과를 비교해 "씬 단위" 변화만 뽑는다.
+//   scene_created  : 비어 있던 땅에 씬이 올라옴
+//   scene_removed  : 씬이 사라지고 다른 씬이 그 땅을 이어받지 않음
+//   scene_updated  : 같은 파셀 구성에서 엔티티만 새 버전으로 바뀜 (제목은 동일성 판단에 쓰지 않는다)
+//   scene_replaced : 파셀 구성이 바뀌었거나 분류(kind)가 바뀐 교체
+// 첫 스캔(이전 state 가 없는 파셀)은 baseline 이라 이벤트로 만들지 않는다.
+// 이번에 못 본 파셀이 하나라도 걸린 씬은 판단을 미룬다 (다음 스캔에서 다시 본다).
+const MAX_EVENTS_PER_RUN = 2000   // 이보다 많으면 비정상(예: DB 초기화)으로 보고 이벤트를 쓰지 않는다
+
+function detectEvents(parcels, scan, kinds, dbKinds, dbTitles) {
+  const events = []
+  const skipped = { unobserved: 0, baseline: 0 }
+  const idx = new Map(parcels.map((p, i) => [p.id, i]))
+  const observed = id => !scan.failed.has(Math.floor(idx.get(id) / CHUNK))
+  const nextEnt = id => scan.pointerToEntity.get(id) ?? null
+  const prevEnt = id => { const p = parcels[idx.get(id)]; return p.state === 'active' ? (p.entity_id ?? null) : null }
+  const hasPrev = id => parcels[idx.get(id)].state != null
+
+  // 이전(DB) 기준 엔티티별 파셀 집합
+  const prevFoot = new Map()
+  for (const p of parcels) if (p.state === 'active' && p.entity_id) {
+    if (!prevFoot.has(p.entity_id)) prevFoot.set(p.entity_id, new Set())
+    prevFoot.get(p.entity_id).add(p.id)
+  }
+
+  const newIds = new Set(), oldIds = new Set()
+  for (const p of parcels) {
+    if (!observed(p.id) || !hasPrev(p.id)) continue
+    const a = prevEnt(p.id), b = nextEnt(p.id)?.id ?? null
+    if (a === b) continue
+    if (b) newIds.add(b)
+    if (a) oldIds.add(a)
+  }
+
+  const sameSet = (a, b) => a.size === b.size && [...a].every(x => b.has(x))
+  const claimed = new Set()        // 이번에 새 씬이 이어받은 옛 파셀
+
+  for (const eid of [...newIds].sort()) {
+    const e = scan.entities.get(eid)
+    const foot = (e.pointers ?? []).filter(id => idx.has(id))
+    if (foot.some(id => !observed(id))) { skipped.unobserved++; continue }
+    if (foot.some(id => !hasPrev(id))) { skipped.baseline++; continue }
+
+    const overlap = new Map()      // 옛 엔티티 → 겹치는 파셀 수
+    let empties = 0
+    for (const id of foot) {
+      const a = prevEnt(id)
+      if (a) overlap.set(a, (overlap.get(a) ?? 0) + 1); else empties++
+    }
+    const prevMain = [...overlap.entries()].sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))[0]?.[0] ?? null
+    for (const a of overlap.keys()) for (const id of prevFoot.get(a) ?? []) claimed.add(id)
+
+    const newKind = kinds.get(eid), prevKind = prevMain ? dbKinds.get(prevMain) ?? null : null
+    let type
+    if (!prevMain) type = 'scene_created'
+    else {
+      const sameFoot = empties === 0 && overlap.size === 1 && sameSet(new Set(foot), prevFoot.get(prevMain) ?? new Set())
+      const kindChanged = prevKind != null && prevKind !== newKind
+      type = sameFoot && !kindChanged ? 'scene_updated' : 'scene_replaced'
+    }
+    const affected = new Set(foot)
+    if (prevMain) for (const id of prevFoot.get(prevMain) ?? []) affected.add(id)
+    events.push({
+      event_key: `${type}|${eid}|${prevMain ?? ''}`,
+      event_type: type,
+      parcels: [...affected].sort(),
+      entity_id: eid, prev_entity_id: prevMain,
+      title: titleOf(e) || null, prev_title: prevMain ? dbTitles.get(prevMain) ?? null : null,
+      kind: newKind, prev_kind: prevKind,
+      parcel_count: parcelCountOf(e),
+      deployed_at: e.timestamp ? new Date(e.timestamp).toISOString() : null,
+    })
+  }
+
+  // 사라진 씬: 옛 엔티티의 모든 파셀이 이번에 관측됐고, 전부 비었고, 새 씬이 이어받지 않은 경우
+  for (const aid of [...oldIds].sort()) {
+    const foot = [...(prevFoot.get(aid) ?? [])]
+    if (!foot.length) continue
+    if (foot.some(id => !observed(id))) { skipped.unobserved++; continue }
+    if (foot.some(id => claimed.has(id) || nextEnt(id))) continue
+    events.push({
+      event_key: `scene_removed||${aid}`,
+      event_type: 'scene_removed',
+      parcels: foot.sort(),
+      entity_id: null, prev_entity_id: aid,
+      title: null, prev_title: dbTitles.get(aid) ?? null,
+      kind: null, prev_kind: dbKinds.get(aid) ?? null,
+      parcel_count: foot.length,
+      deployed_at: null,
+    })
+  }
+  return { events, skipped }
 }
 
 // ── 3) 비교 · 통계 ────────────────────────────────────────────
@@ -285,8 +380,9 @@ const pl = plan(parcels, scan)
 
 const modes = tileModes(parcels, scan)
 const kinds = new Map([...scan.entities.values()].map(e => [e.id, classifyKind(titleOf(e) || null, modes.get(e.id))]))
-const dbKinds = await readSceneKinds()
+const { kinds: dbKinds, titles: dbTitles } = await readSceneKinds()
 const snap = buildSnapshot(parcels, scan, kinds, dbKinds, Date.now())
+const ev = detectEvents(parcels, scan, kinds, dbKinds, dbTitles)
 
 const entityList = [...scan.entities.values()]
 const sceneType = entityList.filter(e => e.type === 'scene')
@@ -333,6 +429,16 @@ console.log(`엔티티 ${entityList.length} (type=scene ${sceneType.length})  | 
   const gridTotal = dec.reduce((a, b) => a + b, 0)
   if (snap.codes.length !== snap.width * snap.height || gridTotal !== snap.codes.length) throw new Error('스냅샷 길이 검증 실패')
 }
+{
+  const byType = new Map()
+  for (const e of ev.events) byType.set(e.event_type, (byType.get(e.event_type) ?? 0) + 1)
+  console.log('\n=== 변화 이벤트 (world_events) ===')
+  console.log(`감지 ${ev.events.length}건  |  판단 보류: 못 본 파셀 ${ev.skipped.unobserved}, baseline(이전 상태 없음) ${ev.skipped.baseline}`)
+  table('종류별', ['scene_created', 'scene_updated', 'scene_replaced', 'scene_removed'].map(t => [t, byType.get(t) ?? 0]))
+  const show = ev.events.slice(0, 10).map(e => [e.event_type, `${(e.title ?? '(없음)').slice(0, 22)} ← ${(e.prev_title ?? '(없음)').slice(0, 22)} | ${e.kind ?? '-'}←${e.prev_kind ?? '-'} | ${e.parcels.length}칸 | ${e.parcels[0]}`])
+  if (show.length) table('샘플 (최대 10)', show)
+  if (ev.events.length > MAX_EVENTS_PER_RUN) console.log(`\n경고: 이벤트가 ${MAX_EVENTS_PER_RUN}건을 넘어 --write 에서도 기록하지 않습니다 (비정상 가능성).`)
+}
 table('tile_type × state', [...pl.cross.entries()].sort().map(([k, v]) => [k, v]))
 table('has_scene(Places 기준) × state', [...pl.crossScene.entries()].sort().map(([k, v]) => [k, v]))
 table('엔티티 제목 패턴 상위 15 (숫자는 #)', histogram(entityList, e => titleOf(e).replace(/-?\d+/g, '#').slice(0, 26), 15))
@@ -350,14 +456,47 @@ if (!WRITE) {
 }
 
 // ── 쓰기 ─────────────────────────────────────────────────────
-// 아무것도 쓰기 전에 스냅샷 테이블이 있는지 먼저 확인한다 (없으면 중간에 멈추지 않도록)
-try {
-  await sbGet('map_snapshots?select=id&limit=1')
-} catch (e) {
-  console.error('map_snapshots 테이블이 없습니다. 먼저 scanner/003_map_snapshots.sql 을 실행하세요.\n' + e.message)
-  process.exit(1)
+// 아무것도 쓰기 전에 필요한 테이블이 있는지 먼저 확인한다 (없으면 중간에 멈추지 않도록)
+for (const [table, sql] of [['map_snapshots', '003_map_snapshots.sql'], ['world_events', '004_world_events.sql']]) {
+  try {
+    await sbGet(`${table}?select=id&limit=1`)
+  } catch (e) {
+    console.error(`${table} 테이블이 없습니다. 먼저 scanner/${sql} 을 실행하세요.\n` + e.message)
+    process.exit(1)
+  }
 }
 const nowIso = new Date().toISOString()
+
+// 실행 기록을 먼저 만들고(진행 중), 끝에서 결과를 채운다. 도중에 멈추면 finished_at 이 빈 채로 남아 흔적이 된다.
+const runRes = await sbPost('scanner_runs', { started_at: startedAt, mode: 'full', note: '진행 중' }, 'return=representation')
+const runId = (await runRes.json())?.[0]?.id ?? null
+const notes = []
+
+// 일부 묶음이라도 못 봤으면 DB 는 건드리지 않는다. 여러 파셀에 걸친 씬을 반만 보고 갱신하면
+// 이력(updated / replaced 판정)이 틀어지기 때문이다. 다음 스캔에서 처음부터 다시 본다.
+if (scan.failed.size) {
+  const note = `불완전한 스캔: 묶음 ${scan.failed.size}개 실패 → 기록하지 않음`
+  await http(`${SB_URL}/rest/v1/scanner_runs?id=eq.${runId}`, {
+    method: 'PATCH', headers: sbHeaders({ Prefer: 'return=minimal' }),
+    body: JSON.stringify({ finished_at: new Date().toISOString(), mode: 'full', failed_count: pl.unobserved, duration_ms: Date.now() - t0, note }),
+  }, 'PATCH scanner_runs')
+  console.error(`\n${note}. 다음 스캔에서 다시 시도합니다. (run ${runId})`)
+  process.exit(2)
+}
+
+// 1) 변화 이벤트 (event_key 가 같으면 무시 → 다시 실행해도 중복되지 않는다). parcels 를 바꾸기 전에 먼저 기록한다.
+if (ev.events.length > MAX_EVENTS_PER_RUN) {
+  notes.push(`이벤트 ${ev.events.length}건이 한도 ${MAX_EVENTS_PER_RUN} 초과라 기록하지 않음`)
+} else {
+  for (let i = 0; i < ev.events.length; i += 500) {
+    const rows = ev.events.slice(i, i + 500).map(e => ({ ...e, observed_at: nowIso, run_id: runId }))
+    await sbPost('world_events?on_conflict=event_key', rows, 'resolution=ignore-duplicates,return=minimal')
+  }
+  if (ev.events.length) process.stdout.write(`world_events 기록: ${ev.events.length}건\n`)
+}
+if (ev.skipped.unobserved) notes.push(`판단 보류(못 본 파셀) ${ev.skipped.unobserved}`)
+
+// 2) 씬 정보
 const scenes = sceneRows(scan.entities, nowIso, kinds)
 for (let i = 0; i < scenes.length; i += 500) {
   await sbPost('catalyst_scenes?on_conflict=entity_id', scenes.slice(i, i + 500), 'resolution=merge-duplicates,return=minimal')
@@ -365,6 +504,7 @@ for (let i = 0; i < scenes.length; i += 500) {
 }
 process.stdout.write('\n')
 
+// 3) 파셀 상태
 let applied = 0
 for (let i = 0; i < pl.changes.length; i += WRITE_BATCH) {
   const res = await sbPost('rpc/apply_parcel_observations', { p_rows: pl.changes.slice(i, i + WRITE_BATCH), p_changed_at: nowIso })
@@ -373,19 +513,23 @@ for (let i = 0; i < pl.changes.length; i += WRITE_BATCH) {
 }
 process.stdout.write('\n')
 
-const runRes = await sbPost('scanner_runs', {
-  started_at: startedAt, finished_at: new Date().toISOString(), mode: 'full',
-  total_checked: pl.active + pl.empty, active_count: pl.active, empty_count: pl.empty,
-  entity_count: entityList.length, changed_count: applied, failed_count: pl.unobserved,
-  duration_ms: Date.now() - t0, note: scan.failed.size ? `실패한 묶음 ${scan.failed.size}` : null,
-}, 'return=representation')
-const runId = (await runRes.json())?.[0]?.id ?? null
-
-// 지도 스냅샷 1행 저장 + 오래된 것 정리 (최근 SNAPSHOT_KEEP 개만 유지)
+// 4) 지도 스냅샷 1행 저장 + 오래된 것 정리 (최근 SNAPSHOT_KEEP 개만 유지)
 await sbPost('map_snapshots', { run_id: runId, ...snap }, 'return=minimal')
 const old = await sbGet(`map_snapshots?select=id&order=id.desc&offset=${SNAPSHOT_KEEP}&limit=1`)
 if (old.length) {
   await http(`${SB_URL}/rest/v1/map_snapshots?id=lte.${old[0].id}`, { method: 'DELETE', headers: sbHeaders() }, 'DELETE map_snapshots')
 }
 
-console.log(`\n완료: scenes ${scenes.length}, parcels 변경 ${applied}/${pl.changes.length}, 스냅샷 1개 저장(run ${runId}), 소요 ${((Date.now() - t0) / 1000).toFixed(1)}초`)
+// 5) 실행 기록 마무리
+if (scan.failed.size) notes.push(`실패한 묶음 ${scan.failed.size}`)
+await http(`${SB_URL}/rest/v1/scanner_runs?id=eq.${runId}`, {
+  method: 'PATCH', headers: sbHeaders({ Prefer: 'return=minimal' }),
+  body: JSON.stringify({
+    finished_at: new Date().toISOString(), mode: 'full',
+    total_checked: pl.active + pl.empty, active_count: pl.active, empty_count: pl.empty,
+    entity_count: entityList.length, changed_count: applied, failed_count: pl.unobserved,
+    duration_ms: Date.now() - t0, note: notes.length ? notes.join(' / ') : null,
+  }),
+}, 'PATCH scanner_runs')
+
+console.log(`\n완료: scenes ${scenes.length}, parcels 변경 ${applied}/${pl.changes.length}, 이벤트 ${ev.events.length > MAX_EVENTS_PER_RUN ? '0 (한도 초과)' : ev.events.length}, 스냅샷 1개 저장(run ${runId}), 소요 ${((Date.now() - t0) / 1000).toFixed(1)}초`)

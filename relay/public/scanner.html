@@ -80,6 +80,31 @@
   .tip .s-unknown { color: var(--unknown); }
   .tip .s-recent { color: var(--ring); }
 
+  .selbox { position: absolute; pointer-events: none; border: 2px solid var(--ring); box-shadow: 0 0 10px rgba(244,255,253,.8); display: none; }
+  .hint { font-size: 10px; letter-spacing: .14em; color: var(--muted); }
+  .phead { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .phead h2 b { color: var(--text); font-weight: 500; letter-spacing: .1em; }
+  .phead button { padding: 3px 8px; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: .12em; }
+  .badge i { display: inline-block; width: 10px; height: 10px; }
+  .badge.b-content { color: var(--content); } .badge.b-content i { background: var(--content); box-shadow: 0 0 6px var(--content); }
+  .badge.b-template { color: #8DB8AE; } .badge.b-template i { background: var(--template); }
+  .badge.b-road { color: var(--road); } .badge.b-road i { background: var(--road); }
+  .badge.b-empty { color: var(--muted); } .badge.b-empty i { background: var(--none); border: 1px solid #26333d; }
+  .badge.b-unknown { color: var(--unknown); } .badge.b-unknown i { background: var(--unknown); }
+  .stitle { font-size: 16px; line-height: 1.35; overflow-wrap: anywhere; }
+  .meta { font-size: 11px; color: var(--muted); line-height: 1.6; }
+  .meta b { color: var(--text); font-weight: 500; }
+  .lhead { margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--grid); font-size: 10px; letter-spacing: .24em; color: var(--muted); }
+  ul.tl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  ul.tl li { position: relative; padding-left: 16px; }
+  ul.tl li::before { content: ""; position: absolute; left: 0; top: 6px; width: 7px; height: 7px; background: var(--content); box-shadow: 0 0 6px var(--content); }
+  ul.tl li.agent::before { background: var(--road); box-shadow: none; border-radius: 50%; }
+  ul.tl .what { font-size: 12.5px; }
+  ul.tl .sub { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+  .plink { display: inline-block; font-size: 10px; letter-spacing: .2em; color: var(--text); border: 1px solid var(--grid); padding: 7px 10px; text-decoration: none; align-self: flex-start; }
+  .plink:hover { border-color: var(--content); color: var(--content); }
+  .plink:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
   .legend { display: flex; gap: 8px 18px; flex-wrap: wrap; align-items: center; font-size: 10px; letter-spacing: .14em; color: var(--muted); }
   .legend span { white-space: nowrap; }
   .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px; }
@@ -100,6 +125,7 @@
 
   .side { display: flex; flex-direction: column; gap: 12px; }
   .panel { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .panel[hidden] { display: none; }
   .panel h2 { margin: 0; font-size: 10px; font-weight: 500; letter-spacing: .24em; color: var(--muted); }
   .kv { display: flex; flex-direction: column; gap: 2px; }
   .kv .k { font-size: 9px; letter-spacing: .2em; color: var(--muted); }
@@ -139,8 +165,10 @@
       <div class="stage" id="stage">
         <canvas id="map" aria-label="DCL world map: parcels with content, templates, roads, empty land and unverified land"></canvas>
         <div class="cursorbox" id="cursorbox"></div>
+        <div class="selbox" id="selbox"></div>
         <div class="tip" id="tip"></div>
       </div>
+      <div class="hint">CLICK A PARCEL FOR DETAILS AND LOWDOWN HISTORY</div>
       <div class="legend" id="legend">
         <span><i class="l-content"></i>CONTENT</span>
         <span><i class="l-template"></i>TEMPLATE / EMPTY SCENE</span>
@@ -152,6 +180,10 @@
     </div>
 
     <aside class="side">
+      <div class="card panel" id="pcard" hidden>
+        <div class="phead"><h2>PARCEL <b id="pid">–</b></h2><button id="pclose" type="button" aria-label="Close parcel details">CLOSE</button></div>
+        <div id="pbody" aria-live="polite"></div>
+      </div>
       <div class="card panel">
         <h2>SCANNER STATUS</h2>
         <div class="kv"><span class="k">LAST SCAN</span><span class="v hot" id="lastAgo">–</span></div>
@@ -220,7 +252,7 @@
         state.updatedAt = Date.now();
         setLive(true);
         $('err').hidden = true;
-        renderText(); draw();
+        renderText(); draw(); if (typeof placeSel === 'function') placeSel();
       })
       .catch(function (e) {
         setLive(false);
@@ -372,6 +404,120 @@
   });
   stage.addEventListener('pointerleave', function () { tip.style.display = 'none'; box.style.display = 'none'; });
 
+
+  /* ---------- parcel panel ---------- */
+  var sel = null, selReq = 0;
+  var kstDay = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', month: 'short', day: 'numeric' });
+  var kstFull = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  var KIND = {
+    user_scene: ['CONTENT', 'b-content'], district: ['CONTENT', 'b-content'], plaza: ['CONTENT', 'b-content'],
+    template: ['TEMPLATE / EMPTY SCENE', 'b-template'], road: ['ROAD', 'b-road'], unknown: ['UNVERIFIED', 'b-unknown']
+  };
+  var EVENT = {
+    scene_created: 'Scene created', scene_updated: 'Scene updated',
+    scene_replaced: 'Scene replaced', scene_removed: 'Scene removed'
+  };
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function placeSel() {
+    var box = $('selbox'), g = state.geo;
+    if (!sel || !g) { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.style.left = (PAD.l + (sel.x - state.minX) * g.cell) + 'px';
+    box.style.top = (PAD.t + (state.maxY - sel.y) * g.cell) + 'px';
+    box.style.width = Math.max(g.cell, 5) + 'px'; box.style.height = Math.max(g.cell, 5) + 'px';
+  }
+  function setHash(x, y) {
+    try { history.replaceState(null, '', x == null ? location.pathname + location.search : '#' + x + ',' + y); } catch (e) {}
+  }
+  function clearParcel() {
+    sel = null; selReq++;
+    $('pcard').hidden = true; $('pbody').innerHTML = '';
+    placeSel(); setHash(null);
+  }
+  function selectParcel(x, y) {
+    sel = { x: x, y: y };
+    var my = ++selReq;
+    $('pcard').hidden = false;
+    $('pid').textContent = x + ',' + y;
+    var body = $('pbody'); body.innerHTML = '';
+    body.appendChild(el('div', 'meta', 'Loading…'));
+    placeSel(); setHash(x, y);
+    if (window.matchMedia('(max-width: 860px)').matches) $('pcard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    fetch('/api/parcel?x=' + x + '&y=' + y, { cache: 'no-store' })
+      .then(function (r) { return r.json().then(function (j) { if (!j.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); })
+      .then(function (j) { if (my === selReq) renderParcel(j); })
+      .catch(function (e) {
+        if (my !== selReq) return;
+        body.innerHTML = '';
+        body.appendChild(el('div', 'err', 'PARCEL ERROR · ' + e.message));
+      });
+  }
+  function renderParcel(j) {
+    var body = $('pbody'); body.innerHTML = '';
+    var scene = j.scene, kind = scene && scene.kind;
+    var label = j.parcel.state === 'empty' ? ['NO SCENE', 'b-empty'] : (KIND[kind] || ['UNVERIFIED', 'b-unknown']);
+    var badge = el('div', 'badge ' + label[1]); badge.appendChild(el('i')); badge.appendChild(el('span', null, label[0]));
+    body.appendChild(badge);
+
+    if (scene) {
+      body.appendChild(el('div', 'stitle', scene.title || '(untitled)'));
+      var m = el('div', 'meta');
+      var n = Number(scene.parcel_count) || 1;
+      m.appendChild(el('div', null, n + (n === 1 ? ' parcel' : ' parcels') + (scene.base ? ' · base ' + scene.base : '')));
+      if (scene.deployed_at) { var d = el('div'); d.appendChild(document.createTextNode('Deployed ')); d.appendChild(el('b', null, kstDay.format(Date.parse(scene.deployed_at)))); m.appendChild(d); }
+      body.appendChild(m);
+    } else if (j.parcel.state === 'empty') {
+      body.appendChild(el('div', 'meta', 'No scene is deployed on this parcel.'));
+    }
+
+    body.appendChild(el('div', 'lhead', 'LOWDOWN HISTORY'));
+    var tl = j.timeline || [];
+    if (!tl.length) {
+      body.appendChild(el('div', 'meta', scene && scene.deployed_at
+        ? 'No changes observed yet. Baseline: this scene was deployed ' + kstDay.format(Date.parse(scene.deployed_at)) + '. Agent visits and changes appear here once recorded.'
+        : 'Nothing recorded for this parcel yet.'));
+    } else {
+      var ul = el('ul', 'tl');
+      tl.forEach(function (t) {
+        var li = el('li', t.source === 'agent' ? 'agent' : 'world');
+        if (t.source === 'world') {
+          li.appendChild(el('div', 'what', EVENT[t.event_type] || t.event_type));
+          var parts = [];
+          if (t.event_type === 'scene_removed') parts.push(t.prev_title || '(untitled)');
+          else if (t.prev_title != null && t.prev_title !== t.title) parts.push((t.prev_title || '(untitled)') + ' → ' + (t.title || '(untitled)'));
+          else parts.push(t.title || '(untitled)');
+          li.appendChild(el('div', 'sub', parts.join('')));
+          var when = 'Observed ' + kstFull.format(Date.parse(t.observed_at)) + ' KST';
+          if (t.deployed_at) when = 'Deployed ' + kstFull.format(Date.parse(t.deployed_at)) + ' · ' + when;
+          li.appendChild(el('div', 'sub', when));
+        } else {
+          li.appendChild(el('div', 'what', 'Agent ' + (t.task_type || 'activity')));
+          li.appendChild(el('div', 'sub', (t.actor || 'agent') + (t.outcome ? ' · ' + t.outcome : '')));
+          if (t.at) li.appendChild(el('div', 'sub', kstFull.format(Date.parse(t.at)) + ' KST'));
+        }
+        ul.appendChild(li);
+      });
+      body.appendChild(ul);
+      body.appendChild(el('div', 'meta', 'History starts when the scanner first observed the change; deployed time is the scene’s own timestamp.'));
+    }
+
+    var a = el('a', 'plink', 'OPEN IN DECENTRALAND');
+    a.href = 'https://play.decentraland.org/?position=' + j.x + ',' + j.y;
+    a.target = '_blank'; a.rel = 'noopener noreferrer';
+    body.appendChild(a);
+  }
+  stage.addEventListener('click', function (e) {
+    var c = cellAt(e); if (!c) return;
+    selectParcel(c.x, c.y);
+  });
+  $('pclose').addEventListener('click', clearParcel);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && sel) clearParcel(); });
+
   /* ---------- controls ---------- */
   $('ringBtn').addEventListener('click', function () {
     state.ring = !state.ring;
@@ -379,14 +525,17 @@
     draw();
   });
   $('refresh').addEventListener('click', load);
-  window.addEventListener('resize', draw);
+  window.addEventListener('resize', function () { draw(); placeSel(); });
   setInterval(tick, 15000);
   setInterval(function () { if (!document.hidden) load(); }, 60000);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
 
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
   draw();
-  load();
+  load().then(function () {
+    var m = /^#(-?\d+),(-?\d+)$/.exec(location.hash);
+    if (m) selectParcel(Number(m[1]), Number(m[2]));
+  });
 })();
 </script>
 </body>
