@@ -13,11 +13,13 @@
     --bg: #080B10;
     --panel: #0E131A;
     --map: #10161D;
-    --cell: #182028;
+    --none: #141B23;
     --grid: #1C2730;
-    --scan: #00E5A0;
-    --recent: #6CFFF0;
-    --dens-lo: #12382F;
+    --content: #00E5A0;
+    --template: #4F7F76;
+    --road: #6B7580;
+    --unknown: #C98A2B;
+    --ring: #F4FFFD;
     --text: #D7E0E5;
     --muted: #71808A;
     --warn: #FF6B6B;
@@ -40,7 +42,7 @@
   .brand .org { font-size: 11px; letter-spacing: .24em; color: var(--muted); }
   .brand h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: .12em; }
   .live { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: .2em; color: var(--muted); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--scan); box-shadow: 0 0 8px var(--scan); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--content); box-shadow: 0 0 8px var(--content); }
   .live.off .dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
   .live:not(.off) .dot { animation: pulse 2.4s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
@@ -49,7 +51,9 @@
   .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .stat { background: var(--panel); border: 1px solid var(--grid); padding: 14px 16px; min-width: 0; }
   .stat .v { font-size: clamp(22px, 5vw, 38px); font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .stat .v.hot { color: var(--scan); text-shadow: 0 0 18px rgba(0,229,160,.28); }
+  .stat .v small { font-size: .42em; color: var(--muted); font-weight: 400; letter-spacing: .04em; }
+  @media (max-width: 560px) { .stat .v { white-space: nowrap; } .stat .v small { display: block; margin-top: 2px; } }
+  .stat .v.hot { color: var(--content); text-shadow: 0 0 18px rgba(0,229,160,.28); }
   .stat .l { margin-top: 6px; font-size: 10px; letter-spacing: .2em; color: var(--muted); }
 
   .main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
@@ -58,10 +62,10 @@
   .card { background: var(--panel); border: 1px solid var(--grid); min-width: 0; }
   .mapcard { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
   .mapbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 10px; letter-spacing: .2em; color: var(--muted); }
-  .mapbar .mode b { color: var(--text); font-weight: 500; }
+  .mapbar b { color: var(--text); font-weight: 500; }
   .stage { position: relative; width: 100%; }
   canvas { display: block; width: 100%; background: var(--map); cursor: crosshair; }
-  .cursorbox { position: absolute; pointer-events: none; border: 1px solid var(--recent); box-shadow: 0 0 6px rgba(108,255,240,.5); display: none; }
+  .cursorbox { position: absolute; pointer-events: none; border: 1px solid var(--ring); box-shadow: 0 0 6px rgba(244,255,253,.5); display: none; }
   .tip {
     position: absolute; pointer-events: none; display: none; z-index: 2; min-width: 150px;
     background: var(--panel); border: 1px solid var(--grid); padding: 8px 10px; font-size: 11px;
@@ -69,23 +73,30 @@
   }
   .tip .k { font-size: 9px; letter-spacing: .2em; color: var(--muted); margin-top: 6px; }
   .tip .k:first-child { margin-top: 0; }
-  .tip .s-on { color: var(--scan); }
-  .tip .s-off { color: var(--muted); }
+  .tip .s-content { color: var(--content); }
+  .tip .s-template { color: #8DB8AE; }
+  .tip .s-road { color: var(--road); }
+  .tip .s-empty { color: var(--muted); }
+  .tip .s-unknown { color: var(--unknown); }
+  .tip .s-recent { color: var(--ring); }
 
-  .legend { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; font-size: 10px; letter-spacing: .16em; color: var(--muted); }
-  .legend i { display: inline-block; width: 8px; height: 8px; margin-right: 6px; vertical-align: -1px; }
-  .legend .l-on { background: var(--scan); box-shadow: 0 0 6px var(--scan); }
-  .legend .l-rec { background: var(--recent); box-shadow: 0 0 6px var(--recent); }
-  .legend .l-off { background: var(--cell); border: 1px solid var(--grid); }
-  .legend .l-dens { background: linear-gradient(90deg, var(--dens-lo), var(--scan)); width: 22px; }
+  .legend { display: flex; gap: 8px 18px; flex-wrap: wrap; align-items: center; font-size: 10px; letter-spacing: .14em; color: var(--muted); }
+  .legend span { white-space: nowrap; }
+  .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px; }
+  .legend .l-content { background: var(--content); box-shadow: 0 0 6px var(--content); }
+  .legend .l-template { background: var(--template); }
+  .legend .l-road { background: var(--road); }
+  .legend .l-empty { background: var(--none); border: 1px solid #26333d; }
+  .legend .l-unknown { background: repeating-linear-gradient(45deg, var(--unknown) 0 2px, var(--none) 2px 4px); }
+  .legend .l-recent { background: var(--content); outline: 1px solid var(--ring); outline-offset: 1px; }
 
   button {
     font: inherit; font-size: 10px; letter-spacing: .2em; color: var(--text); background: transparent;
     border: 1px solid var(--grid); padding: 6px 10px; cursor: pointer;
   }
-  button:hover { border-color: var(--scan); color: var(--scan); }
-  button:focus-visible { outline: 2px solid var(--recent); outline-offset: 2px; }
-  button[aria-pressed="true"] { border-color: var(--scan); color: var(--scan); }
+  button:hover { border-color: var(--content); color: var(--content); }
+  button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+  button[aria-pressed="true"] { border-color: var(--content); color: var(--content); }
 
   .side { display: flex; flex-direction: column; gap: 12px; }
   .panel { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
@@ -93,12 +104,12 @@
   .kv { display: flex; flex-direction: column; gap: 2px; }
   .kv .k { font-size: 9px; letter-spacing: .2em; color: var(--muted); }
   .kv .v { font-size: 15px; font-variant-numeric: tabular-nums; }
-  .kv .v.hot { color: var(--scan); }
-  ul.recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-  ul.recent li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--grid); font-variant-numeric: tabular-nums; font-size: 12px; }
-  ul.recent li:first-child { border-top: 0; }
-  ul.recent .t { color: var(--muted); }
-  ul.recent .empty { color: var(--muted); }
+  .kv .v.hot { color: var(--content); }
+  ul.rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  ul.rows li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--grid); font-variant-numeric: tabular-nums; font-size: 12px; }
+  ul.rows li:first-child { border-top: 0; }
+  ul.rows .n { color: var(--muted); }
+  .note { font-size: 10px; letter-spacing: .06em; color: var(--muted); line-height: 1.6; }
   .err { color: var(--warn); font-size: 12px; }
   .foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 10px; letter-spacing: .16em; color: var(--muted); }
 </style>
@@ -113,28 +124,30 @@
     <div class="live" id="live"><span class="dot"></span><span id="liveText">CONNECTING</span></div>
   </header>
 
-  <section class="stats" aria-label="Scan totals">
-    <div class="stat"><div class="v" id="sTotal">–</div><div class="l">WORLD CELLS</div></div>
-    <div class="stat"><div class="v hot" id="sScanned">–</div><div class="l">SCANNED</div></div>
-    <div class="stat"><div class="v" id="sCov">–</div><div class="l">COVERAGE</div></div>
+  <section class="stats" aria-label="World totals">
+    <div class="stat"><div class="v hot" id="sScenes">–</div><div class="l">SCENES</div></div>
+    <div class="stat"><div class="v hot" id="sContent">–</div><div class="l">CONTENT PARCELS</div></div>
+    <div class="stat"><div class="v" id="sShare">–</div><div class="l">OF THE WORLD</div></div>
   </section>
 
   <section class="main">
     <div class="card mapcard">
       <div class="mapbar">
-        <span class="mode">VIEW <b id="modeText">POINT MODE</b></span>
-        <button id="densBtn" type="button" aria-pressed="false">DENSITY 10×10</button>
+        <span>VIEW <b>CURRENT STATE</b></span>
+        <button id="ringBtn" type="button" aria-pressed="true">RECENT 7D OUTLINE</button>
       </div>
       <div class="stage" id="stage">
-        <canvas id="map" aria-label="DCL world coordinate map showing scanned parcels"></canvas>
+        <canvas id="map" aria-label="DCL world map: parcels with content, templates, roads, empty land and unverified land"></canvas>
         <div class="cursorbox" id="cursorbox"></div>
         <div class="tip" id="tip"></div>
       </div>
-      <div class="legend">
-        <span><i class="l-rec"></i>RECENT 6H</span>
-        <span><i class="l-on"></i>SCANNED</span>
-        <span><i class="l-off"></i>UNSCANNED</span>
-        <span><i class="l-dens"></i>DENSITY</span>
+      <div class="legend" id="legend">
+        <span><i class="l-content"></i>CONTENT</span>
+        <span><i class="l-template"></i>TEMPLATE / EMPTY SCENE</span>
+        <span><i class="l-road"></i>ROAD</span>
+        <span><i class="l-empty"></i>NO SCENE</span>
+        <span><i class="l-unknown"></i>UNVERIFIED</span>
+        <span><i class="l-recent"></i>CHANGED ≤7D</span>
       </div>
     </div>
 
@@ -143,13 +156,17 @@
         <h2>SCANNER STATUS</h2>
         <div class="kv"><span class="k">LAST SCAN</span><span class="v hot" id="lastAgo">–</span></div>
         <div class="kv"><span class="k">LAST SCAN (KST)</span><span class="v" id="lastAt">–</span></div>
-        <div class="kv"><span class="k">SCANNED</span><span class="v" id="pScanned">–</span></div>
-        <div class="kv"><span class="k">COVERAGE</span><span class="v" id="pCov">–</span></div>
         <div class="err" id="err" hidden></div>
       </div>
       <div class="card panel">
-        <h2>RECENT</h2>
-        <ul class="recent" id="recent"><li class="empty">–</li></ul>
+        <h2>PARCELS</h2>
+        <ul class="rows" id="rows"><li><span>–</span></li></ul>
+        <div class="note" id="note"></div>
+      </div>
+      <div class="card panel">
+        <h2>CHANGED IN 7 DAYS</h2>
+        <div class="kv"><span class="k">SCENES</span><span class="v" id="rScenes">–</span></div>
+        <div class="kv"><span class="k">PARCELS</span><span class="v" id="rParcels">–</span></div>
       </div>
     </aside>
   </section>
@@ -162,16 +179,18 @@
 
 <script>
 (function () {
-  var MIN = -150, MAX = 150, N = MAX - MIN + 1;       // DCL World 좌표 범위
-  var BIN = 10;                                       // density 집계 단위
-  var DENSITY_AUTO_AT = 1000;                         // 이 개수부터 density 자동 ON
-  var RECENT_MS = 6 * 3600 * 1000;
+  // codes: 한 칸 한 글자. 0 없음 / 1 콘텐츠 / 2 템플릿 / 3 도로 / 4 미확인, 5~9 = 0~4 + 최근 변경
   var PAD = { l: 38, r: 10, t: 10, b: 24 };
-  var C = { map: '#10161D', cell: '#182028', grid: '#1C2730', axis: '#2A3944', scan: '#00E5A0', recent: '#6CFFF0', lo: [0x12, 0x38, 0x2F], hi: [0x00, 0xE5, 0xA0], muted: '#71808A' };
+  var C = {
+    map: '#10161D', none: '#141B23', grid: '#1C2730', axis: '#2A3944', muted: '#71808A',
+    content: '#00E5A0', template: '#4F7F76', road: '#6B7580', unknown: '#C98A2B', ring: '#F4FFFD'
+  };
+  var LABEL = ['NO SCENE', 'CONTENT', 'TEMPLATE / EMPTY SCENE', 'ROAD', 'UNVERIFIED'];
+  var CLS = ['s-empty', 's-content', 's-template', 's-road', 's-unknown'];
 
   var $ = function (id) { return document.getElementById(id); };
   var canvas = $('map'), ctx = canvas.getContext('2d');
-  var state = { total: 0, scanned: 0, parcels: [], lookup: {}, densityPref: 'auto', geo: null, updatedAt: null };
+  var state = { snap: null, cells: null, W: 0, H: 0, minX: -150, maxY: 150, ring: true, geo: null, updatedAt: null };
 
   var fmt = function (n) { return Number(n).toLocaleString('en-US'); };
   var kst = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Seoul', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
@@ -186,28 +205,19 @@
     if (h < 48) return h + 'h ' + (m % 60) + 'm ago';
     return Math.floor(h / 24) + 'd ago';
   }
-  function pct(scanned, total) {
-    if (!total) return '–';
-    var p = scanned / total * 100;
-    if (scanned > 0 && p < 0.01) return '<0.01%';
-    return p.toFixed(2) + '%';
-  }
-  function key(x, y) { return x + ',' + y; }
-  function densityOn() {
-    if (state.densityPref === 'on') return true;
-    if (state.densityPref === 'off') return false;
-    return state.scanned >= DENSITY_AUTO_AT;
-  }
+  function pct(n, total) { return total ? (n / total * 100).toFixed(1) + '%' : '–'; }
 
   /* ---------- data ---------- */
   function load() {
     return fetch('/api/heatmap', { cache: 'no-store' })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); })
       .then(function (j) {
-        state.total = j.total; state.scanned = j.scanned; state.updatedAt = Date.now();
-        state.parcels = (j.parcels || []).map(function (p) { return { x: p.x, y: p.y, t: p.last_scanned ? Date.parse(p.last_scanned) : 0 }; });
-        state.lookup = {};
-        state.parcels.forEach(function (p) { state.lookup[key(p.x, p.y)] = p; });
+        var s = j.snapshot;
+        state.snap = s; state.W = s.width; state.H = s.height; state.minX = s.min_x; state.maxY = s.max_y;
+        var cells = new Uint8Array(s.codes.length);
+        for (var i = 0; i < s.codes.length; i++) cells[i] = s.codes.charCodeAt(i) - 48;
+        state.cells = cells;
+        state.updatedAt = Date.now();
         setLive(true);
         $('err').hidden = true;
         renderText(); draw();
@@ -224,48 +234,47 @@
   }
 
   /* ---------- text ---------- */
+  function row(name, n, sub) {
+    var li = document.createElement('li');
+    var a = document.createElement('span'); a.textContent = name;
+    var b = document.createElement('span'); b.textContent = fmt(n);
+    if (sub) { var c = document.createElement('span'); c.className = 'n'; c.textContent = ' ' + sub; b.appendChild(c); }
+    li.appendChild(a); li.appendChild(b);
+    return li;
+  }
   function renderText() {
-    $('sTotal').textContent = fmt(state.total);
-    $('sScanned').textContent = fmt(state.scanned);
-    $('sCov').textContent = pct(state.scanned, state.total);
-    $('pScanned').textContent = fmt(state.scanned) + ' / ' + fmt(state.total);
-    $('pCov').textContent = pct(state.scanned, state.total);
-    var dOn = densityOn();
-    $('modeText').textContent = dOn ? 'DENSITY MODE' : 'POINT MODE';
-    $('densBtn').setAttribute('aria-pressed', dOn ? 'true' : 'false');
+    var st = state.snap && state.snap.stats; if (!st) return;
+    var total = st.total_parcels;
+    $('sScenes').textContent = fmt(st.scenes.content);
+    $('sContent').innerHTML = fmt(st.parcels.content) + ' <small>/ ' + fmt(total) + '</small>';
+    $('sShare').textContent = pct(st.parcels.content, total);
 
-    var sorted = state.parcels.filter(function (p) { return p.t; }).sort(function (a, b) { return b.t - a.t; });
-    var ul = $('recent'); ul.innerHTML = '';
-    if (!sorted.length) {
-      var li = document.createElement('li'); li.className = 'empty'; li.textContent = 'No scans yet'; ul.appendChild(li);
-    }
-    sorted.slice(0, 8).forEach(function (p) {
-      var li = document.createElement('li');
-      var a = document.createElement('span'); a.textContent = p.x + ',' + p.y;
-      var b = document.createElement('span'); b.className = 't'; b.textContent = hhmm.format(p.t);
-      li.appendChild(a); li.appendChild(b); ul.appendChild(li);
-    });
+    var ul = $('rows'); ul.innerHTML = '';
+    ul.appendChild(row('Content', st.parcels.content, pct(st.parcels.content, total)));
+    ul.appendChild(row('Templates', st.parcels.template, pct(st.parcels.template, total)));
+    ul.appendChild(row('Roads', st.parcels.road, pct(st.parcels.road, total)));
+    ul.appendChild(row('Empty', st.parcels.empty, pct(st.parcels.empty, total)));
+    ul.appendChild(row('Unverified', st.parcels.unknown, pct(st.parcels.unknown, total)));
+    $('note').textContent = 'Scenes: ' + fmt(st.scenes.content) + ' with content · ' + fmt(st.scenes.template) + ' templates · ' + fmt(st.scenes.road) + ' road pieces. A scene can cover several parcels.';
+
+    $('rScenes').textContent = fmt(st.recent.scenes);
+    $('rParcels').textContent = fmt(st.recent.parcels);
     tick();
   }
   function tick() {
-    var last = 0;
-    state.parcels.forEach(function (p) { if (p.t > last) last = p.t; });
-    $('lastAgo').textContent = last ? ago(Date.now() - last) : '–';
-    $('lastAt').textContent = last ? kst.format(last) : '–';
+    var s = state.snap;
+    var t = s ? Date.parse(s.created_at) : 0;
+    $('lastAgo').textContent = t ? ago(Date.now() - t) : '–';
+    $('lastAt').textContent = t ? kst.format(t) : '–';
     $('updated').textContent = state.updatedAt ? 'UPDATED ' + hhmm.format(state.updatedAt) + ' KST' : 'UPDATED –';
   }
 
   /* ---------- canvas ---------- */
-  function lerp(t) {
-    var r = Math.round(C.lo[0] + (C.hi[0] - C.lo[0]) * t);
-    var g = Math.round(C.lo[1] + (C.hi[1] - C.lo[1]) * t);
-    var b = Math.round(C.lo[2] + (C.hi[2] - C.lo[2]) * t);
-    return 'rgba(' + r + ',' + g + ',' + b + ',' + (0.35 + 0.65 * t).toFixed(3) + ')';
-  }
   function draw() {
     var stage = $('stage');
     var cssW = Math.floor(stage.clientWidth);
     if (!cssW) return;
+    var N = state.W || 301;
     var plot = cssW - PAD.l - PAD.r;
     var cssH = plot + PAD.t + PAD.b;
     var dpr = window.devicePixelRatio || 1;
@@ -273,83 +282,78 @@
     canvas.style.height = cssH + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     var cell = plot / N;
-    state.geo = { cell: cell, plot: plot };
-    var px = function (x) { return PAD.l + (x - MIN) * cell; };
-    var py = function (y) { return PAD.t + (MAX - y) * cell; };
+    state.geo = { cell: cell, plot: plot, N: N };
+    var px = function (cx) { return PAD.l + cx * cell; };
+    var py = function (cy) { return PAD.t + cy * cell; };
 
     ctx.fillStyle = C.map; ctx.fillRect(0, 0, cssW, cssH);
+    ctx.fillStyle = C.none; ctx.fillRect(PAD.l, PAD.t, plot, plot);
 
-    // 미탐험 셀 (아주 낮은 대비)
-    ctx.fillStyle = C.cell;
-    var gap = cell >= 3 ? 0.6 : 0.35;
-    for (var x = MIN; x <= MAX; x++) for (var y = MIN; y <= MAX; y++) ctx.fillRect(px(x) + gap / 2, py(y) + gap / 2, cell - gap, cell - gap);
-
-    // grid + axis
+    // grid + axis (50칸마다)
     ctx.lineWidth = 1; ctx.font = '10px ' + getComputedStyle(document.body).fontFamily; ctx.fillStyle = C.muted;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    for (var v = MIN; v <= MAX; v += 50) {
-      var gx = Math.round(PAD.l + (v - MIN + 0.5) * cell) + 0.5;
+    for (var v = -150; v <= 150; v += 50) {
+      var gx = Math.round(PAD.l + (v - state.minX + 0.5) * cell) + 0.5;
       ctx.strokeStyle = v === 0 ? C.axis : C.grid;
       ctx.beginPath(); ctx.moveTo(gx, PAD.t); ctx.lineTo(gx, PAD.t + plot); ctx.stroke();
       ctx.fillText(String(v), gx, PAD.t + plot + 6);
     }
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    for (var w = MIN; w <= MAX; w += 50) {
-      var gy = Math.round(PAD.t + (MAX - w + 0.5) * cell) + 0.5;
+    for (var w = -150; w <= 150; w += 50) {
+      var gy = Math.round(PAD.t + (state.maxY - w + 0.5) * cell) + 0.5;
       ctx.strokeStyle = w === 0 ? C.axis : C.grid;
       ctx.beginPath(); ctx.moveTo(PAD.l, gy); ctx.lineTo(PAD.l + plot, gy); ctx.stroke();
       ctx.fillText(String(w), PAD.l - 6, gy);
     }
 
-    if (densityOn()) {
-      var bins = {};
-      state.parcels.forEach(function (p) {
-        var bx = Math.floor((p.x - MIN) / BIN), by = Math.floor((p.y - MIN) / BIN);
-        var k = bx + ':' + by; bins[k] = (bins[k] || 0) + 1;
-      });
-      ctx.save();
-      ctx.beginPath(); ctx.rect(PAD.l, PAD.t, plot, plot); ctx.clip();   // 마지막 빈은 10칸보다 작으므로 지도 밖은 자름
-      Object.keys(bins).forEach(function (k) {
-        var parts = k.split(':'), bx = +parts[0], by = +parts[1];
-        var t = Math.sqrt(Math.min(1, bins[k] / (BIN * BIN)));
-        ctx.fillStyle = lerp(t);
-        var x0 = MIN + bx * BIN, y1 = MIN + by * BIN + BIN - 1;   // 빈의 좌상단 셀
-        ctx.fillRect(px(x0), py(y1), BIN * cell, BIN * cell);
-      });
-      ctx.restore();
-    } else {
-      var now = Date.now();
-      var older = [], recent = [];
-      state.parcels.forEach(function (p) { (p.t && now - p.t <= RECENT_MS ? recent : older).push(p); });
-      var size = Math.max(5, cell * 1.8);
-      var drawSet = function (list, color, blur) {
-        ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = blur;
-        list.forEach(function (p) { ctx.fillRect(px(p.x) + cell / 2 - size / 2, py(p.y) + cell / 2 - size / 2, size, size); });
-        ctx.shadowBlur = 0;
-      };
-      drawSet(older, C.scan, 8);
-      drawSet(recent, C.recent, 14);
+    var cells = state.cells;
+    if (!cells) return;
+    var gap = cell >= 3 ? 0.4 : 0;
+    var colors = [null, C.content, C.template, C.road, C.unknown];
+    // 색깔별로 한 번씩 (fillStyle 교체 최소화)
+    for (var base = 1; base <= 4; base++) {
+      ctx.fillStyle = colors[base];
+      if (base === 4) ctx.globalAlpha = 0.85;
+      for (var i = 0; i < cells.length; i++) {
+        var c = cells[i] % 5;
+        if (c !== base) continue;
+        ctx.fillRect(px(i % N) + gap / 2, py((i / N) | 0) + gap / 2, cell - gap, cell - gap);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // 최근 변경: 칸 색은 그대로 두고 테두리/빛만 덧그린다
+    if (state.ring) {
+      var lw = Math.max(1, cell * 0.3);
+      ctx.strokeStyle = C.ring; ctx.lineWidth = lw; ctx.shadowColor = C.ring; ctx.shadowBlur = 6;
+      for (var j = 0; j < cells.length; j++) {
+        if (cells[j] < 5) continue;
+        var rx = px(j % N), ry = py((j / N) | 0);
+        ctx.strokeRect(rx - lw / 2, ry - lw / 2, cell + lw, cell + lw);
+      }
+      ctx.shadowBlur = 0;
     }
   }
 
   /* ---------- hover ---------- */
   var stage = $('stage'), tip = $('tip'), box = $('cursorbox');
   function cellAt(e) {
-    var g = state.geo; if (!g) return null;
+    var g = state.geo; if (!g || !state.cells) return null;
     var r = canvas.getBoundingClientRect();
     var mx = e.clientX - r.left, my = e.clientY - r.top;
     var cx = Math.floor((mx - PAD.l) / g.cell), cy = Math.floor((my - PAD.t) / g.cell);
-    if (cx < 0 || cy < 0 || cx >= N || cy >= N) return null;
-    return { x: MIN + cx, y: MAX - cy, mx: mx, my: my };
+    if (cx < 0 || cy < 0 || cx >= g.N || cy >= g.N) return null;
+    return { cx: cx, cy: cy, x: state.minX + cx, y: state.maxY - cy, mx: mx, my: my };
   }
   stage.addEventListener('pointermove', function (e) {
     var c = cellAt(e);
     if (!c) { tip.style.display = 'none'; box.style.display = 'none'; return; }
     var g = state.geo;
-    var p = state.lookup[key(c.x, c.y)];
+    var code = state.cells[c.cy * g.N + c.cx];
+    var base = code % 5, recent = code >= 5;
     box.style.display = 'block';
-    box.style.left = (PAD.l + (c.x - MIN) * g.cell) + 'px';
-    box.style.top = (PAD.t + (MAX - c.y) * g.cell) + 'px';
+    box.style.left = (PAD.l + c.cx * g.cell) + 'px';
+    box.style.top = (PAD.t + c.cy * g.cell) + 'px';
     box.style.width = Math.max(g.cell, 4) + 'px'; box.style.height = Math.max(g.cell, 4) + 'px';
     tip.innerHTML = '';
     var add = function (k, v, cls) {
@@ -358,8 +362,8 @@
       tip.appendChild(a); tip.appendChild(b);
     };
     add('PARCEL', c.x + ',' + c.y);
-    add('STATUS', p ? 'SCANNED' : 'UNSCANNED', p ? 's-on' : 's-off');
-    if (p && p.t) add('LAST SCAN', kst.format(p.t) + ' KST');
+    add('STATE', LABEL[base], CLS[base]);
+    if (recent) add('RECENT', 'CHANGED WITHIN 7 DAYS', 's-recent');
     tip.style.display = 'block';
     var tw = tip.offsetWidth, sw = stage.clientWidth;
     var left = c.mx + 14; if (left + tw > sw) left = c.mx - tw - 14;
@@ -369,9 +373,10 @@
   stage.addEventListener('pointerleave', function () { tip.style.display = 'none'; box.style.display = 'none'; });
 
   /* ---------- controls ---------- */
-  $('densBtn').addEventListener('click', function () {
-    state.densityPref = densityOn() ? 'off' : 'on';
-    renderText(); draw();
+  $('ringBtn').addEventListener('click', function () {
+    state.ring = !state.ring;
+    $('ringBtn').setAttribute('aria-pressed', state.ring ? 'true' : 'false');
+    draw();
   });
   $('refresh').addEventListener('click', load);
   window.addEventListener('resize', draw);

@@ -4,84 +4,57 @@ const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_KE
 
 export const config = { runtime: 'edge' }
 
-// ---PURE-START (의존성 없는 순수 코드: PNG 인코딩 + 지도 그리기) ---------------
-const W = 512                 // 이미지 한 변 (px)
-const MIN = -150, MAX = 150
-const N = MAX - MIN + 1       // 301 칸
-const BIN = 10                // density 집계 단위
-const DENSITY_AT = 1000       // 이 개수부터 density 모드
-const RECENT_MS = 6 * 3600 * 1000
+// ---PURE-START (의존성 없는 순수 코드: 스냅샷 → 비트맵 → PNG) ---------------
+const SCALE = 4               // 한 칸을 4×4 픽셀로 (최근 변경 테두리가 보이도록)
 
 // 팔레트 인덱스 (웹 World Scanner 와 같은 색)
-const BG = 0, CELL = 1, GRID = 2, AXIS = 3, SCAN = 4, RECENT = 5, GLOW = 6, GLOW_RECENT = 7, DENS0 = 8, DENS_LEVELS = 9
+const NONE = 0, CONTENT = 1, TEMPLATE = 2, ROAD = 3, UNKNOWN = 4, GRID = 5, AXIS = 6, RECENT = 7
+const PALETTE: number[][] = [
+  [0x14, 0x1b, 0x23], // NONE      씬 없음 (어두운 색)
+  [0x00, 0xe5, 0xa0], // CONTENT   콘텐츠 있음 (강조색)
+  [0x4f, 0x7f, 0x76], // TEMPLATE  템플릿/빈 씬 (옅은 색)
+  [0x6b, 0x75, 0x80], // ROAD      도로 (회색)
+  [0xc9, 0x8a, 0x2b], // UNKNOWN   미확인 (점선 무늬)
+  [0x26, 0x33, 0x3d], // GRID
+  [0x3a, 0x4a, 0x57], // AXIS
+  [0xf4, 0xff, 0xfd], // RECENT    최근 변경 (밝은 테두리 overlay, 칸 색은 그대로)
+]
+const BASE_COLOR = [NONE, CONTENT, TEMPLATE, ROAD, UNKNOWN]
 
-function buildPalette(): number[][] {
-  const p: number[][] = [
-    [0x10, 0x16, 0x1d], // BG
-    [0x18, 0x20, 0x28], // CELL (미탐험)
-    [0x26, 0x33, 0x3d], // GRID
-    [0x3a, 0x4a, 0x57], // AXIS
-    [0x00, 0xe5, 0xa0], // SCAN
-    [0x6c, 0xff, 0xf0], // RECENT
-    [0x0a, 0x5a, 0x45], // GLOW
-    [0x2a, 0x8f, 0x88], // GLOW_RECENT
-  ]
-  const lo = [0x12, 0x38, 0x2f], hi = [0x00, 0xe5, 0xa0]
-  for (let i = 0; i < DENS_LEVELS; i++) {
-    const t = i / (DENS_LEVELS - 1)
-    p.push([0, 1, 2].map(k => Math.round(lo[k] + (hi[k] - lo[k]) * t)))
+/** codes(한 칸 한 글자) → 인덱스 컬러 비트맵. 위쪽이 북쪽(y 증가), 오른쪽이 동쪽(x 증가). */
+function renderSnapshot(codes: string, width: number, height: number, minX: number, maxY: number): { px: Uint8Array; w: number; h: number } {
+  const w = width * SCALE, h = height * SCALE
+  const px = new Uint8Array(w * h)
+
+  for (let cy = 0; cy < height; cy++) {
+    for (let cx = 0; cx < width; cx++) {
+      const c = codes.charCodeAt(cy * width + cx) - 48
+      const valid = c >= 0 && c <= 9
+      const base = valid ? c % 5 : 4
+      const recent = valid && c >= 5
+      for (let dy = 0; dy < SCALE; dy++) {
+        for (let dx = 0; dx < SCALE; dx++) {
+          let idx = BASE_COLOR[base]
+          if (base === 4 && (dx + dy) % 2 === 1) idx = NONE                      // 점선 무늬
+          if (recent && (dx === 0 || dy === 0 || dx === SCALE - 1 || dy === SCALE - 1)) idx = RECENT   // 색은 유지, 테두리만 overlay
+          px[(cy * SCALE + dy) * w + cx * SCALE + dx] = idx
+        }
+      }
+    }
   }
-  return p
-}
-const PALETTE = buildPalette()
 
-interface P { x: number; y: number; t: number }
-
-/** 파셀 목록 → 인덱스 컬러 비트맵 (W×W). 위쪽이 북쪽(y 증가), 오른쪽이 동쪽(x 증가). */
-function renderMap(parcels: P[], now: number): Uint8Array {
-  const px = new Uint8Array(W * W).fill(CELL)
-  const col = (c: number) => Math.min(W - 1, Math.floor((c + 0.5) * W / N)) // 셀 인덱스 → 중심 픽셀
-
-  // 50칸마다 격자, 0 축은 더 밝게
-  for (let v = MIN; v <= MAX; v += 50) {
+  // 50칸마다 격자 (0 축은 더 밝게). 칸 색을 덮지 않고 "씬 없음" 픽셀 위에만 그린다.
+  for (let v = -150; v <= 150; v += 50) {
     const idx = v === 0 ? AXIS : GRID
-    const cx = col(v - MIN)          // x = v 인 세로선
-    const cy = col(MAX - v)          // y = v 인 가로선 (위가 북쪽이라 뒤집음)
-    for (let k = 0; k < W; k++) { px[k * W + cx] = idx; px[cy * W + k] = idx }
+    const gx = (v - minX) * SCALE + (SCALE >> 1)          // x = v 인 세로선
+    const gy = (maxY - v) * SCALE + (SCALE >> 1)          // y = v 인 가로선 (위가 북쪽)
+    if (gx >= 0 && gx < w) for (let k = 0; k < h; k++) if (px[k * w + gx] === NONE) px[k * w + gx] = idx
+    if (gy >= 0 && gy < h) for (let k = 0; k < w; k++) if (px[gy * w + k] === NONE) px[gy * w + k] = idx
   }
-
-  const rect = (x0: number, y0: number, x1: number, y1: number, idx: number) => {
-    for (let y = Math.max(0, y0); y <= Math.min(W - 1, y1); y++)
-      for (let x = Math.max(0, x0); x <= Math.min(W - 1, x1); x++) px[y * W + x] = idx
-  }
-
-  if (parcels.length >= DENSITY_AT) {
-    const bins = new Map<string, number>()
-    for (const p of parcels) {
-      const k = Math.floor((p.x - MIN) / BIN) + ':' + Math.floor((p.y - MIN) / BIN)
-      bins.set(k, (bins.get(k) ?? 0) + 1)
-    }
-    bins.forEach((count, k) => {
-      const [bx, by] = k.split(':').map(Number)
-      const level = Math.round(Math.sqrt(Math.min(1, count / (BIN * BIN))) * (DENS_LEVELS - 1))
-      const c0 = bx * BIN, c1 = Math.min(N, c0 + BIN)              // 가로 셀 범위
-      const r1 = N - by * BIN, r0 = Math.max(0, r1 - BIN)          // 세로 셀 범위(위가 북쪽)
-      rect(Math.floor(c0 * W / N), Math.floor(r0 * W / N), Math.floor(c1 * W / N) - 1, Math.floor(r1 * W / N) - 1, DENS0 + level)
-    })
-  } else {
-    const point = (p: P, core: number, glow: number) => {
-      const cx = col(p.x - MIN), cy = col(MAX - p.y)
-      rect(cx - 3, cy - 3, cx + 2, cy + 2, glow)   // 6×6 glow
-      rect(cx - 2, cy - 2, cx + 1, cy + 1, core)   // 4×4 core
-    }
-    const isRecent = (p: P) => p.t > 0 && now - p.t <= RECENT_MS
-    parcels.filter(p => !isRecent(p)).forEach(p => point(p, SCAN, GLOW))
-    parcels.filter(isRecent).forEach(p => point(p, RECENT, GLOW_RECENT))
-  }
-  return px
+  return { px, w, h }
 }
 
-// ── PNG 인코더 (팔레트 8bit, zlib stored 블록 → 압축 라이브러리 불필요) ──
+// ── PNG 인코더 (팔레트 8bit) ──
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256)
   for (let n = 0; n < 256; n++) {
@@ -115,12 +88,8 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
   return out
 }
 
-function encodePng(indices: Uint8Array, size: number, palette: number[][]): Uint8Array {
-  // 각 행 앞에 필터 바이트 0
-  const raw = new Uint8Array((size + 1) * size)
-  for (let y = 0; y < size; y++) raw.set(indices.subarray(y * size, (y + 1) * size), y * (size + 1) + 1)
-
-  // zlib: 헤더 + stored 블록(최대 65535바이트) + adler32
+/** zlib 압축 없이 stored 블록으로 감싸기 (CompressionStream 이 없을 때의 대비책) */
+function zlibStored(raw: Uint8Array): Uint8Array {
   const blocks = Math.ceil(raw.length / 65535)
   const z = new Uint8Array(2 + raw.length + blocks * 5 + 4)
   z[0] = 0x78; z[1] = 0x01
@@ -133,8 +102,28 @@ function encodePng(indices: Uint8Array, size: number, palette: number[][]): Uint
     z.set(part, o); o += part.length
   }
   z.set(be32(adler32(raw)), o)
+  return z
+}
 
-  const ihdr = new Uint8Array([...be32(size), ...be32(size), 8, 3, 0, 0, 0])
+async function zlibDeflate(raw: Uint8Array): Promise<Uint8Array> {
+  const CS = (globalThis as any).CompressionStream
+  if (!CS) return zlibStored(raw)
+  try {
+    const cs = new CS('deflate')                       // 'deflate' = zlib 형식
+    const writer = cs.writable.getWriter()
+    writer.write(raw); writer.close()
+    return new Uint8Array(await new Response(cs.readable).arrayBuffer())
+  } catch {
+    return zlibStored(raw)
+  }
+}
+
+async function encodePng(indices: Uint8Array, w: number, h: number, palette: number[][]): Promise<Uint8Array> {
+  const raw = new Uint8Array((w + 1) * h)               // 각 행 앞에 필터 바이트 0
+  for (let y = 0; y < h; y++) raw.set(indices.subarray(y * w, (y + 1) * w), y * (w + 1) + 1)
+  const z = await zlibDeflate(raw)
+
+  const ihdr = new Uint8Array([...be32(w), ...be32(h), 8, 3, 0, 0, 0])
   const plte = new Uint8Array(palette.flat())
   const parts = [
     new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -147,28 +136,29 @@ function encodePng(indices: Uint8Array, size: number, palette: number[][]): Uint
 }
 // ---PURE-END ---------------------------------------------------------------
 
-const PAGE = 1000 // PostgREST 기본 max-rows
-
 export default async function handler(req: Request) {
   const headersBase = { 'Access-Control-Allow-Origin': '*' }
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...headersBase, 'Access-Control-Allow-Methods': 'GET, OPTIONS' } })
 
-  const countRes = await supabase.from('parcels').select('id', { count: 'exact', head: true }).eq('scan_status', 'completed')
-  if (countRes.error) return Response.json({ ok: false, error: countRes.error.message }, { status: 500, headers: headersBase })
+  const { data, error } = await supabase
+    .from('map_snapshots')
+    .select('width, height, min_x, max_y, codes')
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) return Response.json({ ok: false, error: error.message }, { status: 500, headers: headersBase })
 
-  const pages = Math.ceil((countRes.count ?? 0) / PAGE)
-  const results = await Promise.all(
-    Array.from({ length: pages }, (_, i) =>
-      supabase.from('parcels').select('x, y, last_scanned').eq('scan_status', 'completed').order('id').range(i * PAGE, i * PAGE + PAGE - 1)
-    )
-  )
-  const failed = results.find(r => r.error)
-  if (failed?.error) return Response.json({ ok: false, error: failed.error.message }, { status: 500, headers: headersBase })
+  // 스냅샷이 아직 없으면 빈 지도(전부 "씬 없음")를 짧게만 캐시해서 돌려준다
+  const width = data?.width ?? 301, height = data?.height ?? 301
+  const codes = data?.codes ?? '0'.repeat(width * height)
+  const { px, w, h } = renderSnapshot(codes, width, height, data?.min_x ?? -150, data?.max_y ?? 150)
+  const png = await encodePng(px, w, h, PALETTE)
 
-  const parcels: P[] = results.flatMap(r => r.data ?? []).map(r => ({ x: r.x, y: r.y, t: r.last_scanned ? Date.parse(r.last_scanned) : 0 }))
-  const png = encodePng(renderMap(parcels, Date.now()), W, PALETTE)
-
-  return new Response(png, {
-    headers: { ...headersBase, 'Content-Type': 'image/png', 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' },
+  return new Response(png as unknown as BodyInit, {
+    headers: {
+      ...headersBase,
+      'Content-Type': 'image/png',
+      'Cache-Control': data ? 'public, s-maxage=60, stale-while-revalidate=120' : 'public, s-maxage=10',
+    },
   })
 }
