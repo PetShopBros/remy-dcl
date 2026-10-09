@@ -1,0 +1,45 @@
+﻿# World Scanner 자동 실행 (DCL 세계 변화 데이터 수집)
+# - 하루 2번 (한국 시간 00:23 / 12:23). 정각은 GitHub 부하가 몰려 피한다.
+# - Remy 크론(explore-cron-remy*.yml)과는 별개의 시스템이며 서로 영향을 주지 않는다.
+# - 키는 코드에 넣지 않는다. 저장소 Secrets 에 SUPABASE_URL, SUPABASE_SERVICE_KEY 를 등록해야 한다.
+# - 수동 실행(Run workflow)은 기본이 dry-run(DB 에 쓰지 않음)이다. 기록하려면 write 를 체크한다.
+name: World Scanner
+
+on:
+  schedule:
+    - cron: '23 3,15 * * *'   # UTC 03:23 / 15:23 = KST 12:23 / 00:23
+  workflow_dispatch:
+    inputs:
+      write:
+        description: 'DB 에 기록 (체크하지 않으면 dry-run: 계산만 하고 쓰지 않음)'
+        type: boolean
+        default: false
+
+# 스캔 두 개가 동시에 돌아 DB 에 겹쳐 쓰지 않게 한다 (뒤에 온 실행은 앞 실행이 끝날 때까지 대기)
+concurrency:
+  group: world-scanner
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run world scanner
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # 예약 실행은 항상 기록, 수동 실행은 write 를 체크했을 때만 기록
+          WRITE_FLAG: ${{ (github.event_name == 'schedule' || inputs.write) && '--write' || '' }}
+        run: |
+          echo "mode: ${WRITE_FLAG:-dry-run}  event: ${GITHUB_EVENT_NAME}"
+          node scanner/world-scanner.mjs ${WRITE_FLAG}
