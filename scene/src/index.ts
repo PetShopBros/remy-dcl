@@ -1,9 +1,11 @@
-import { setupRemy, executeIntent, getRemyEntity, getRemyStatus } from './remy'
-import { engine, Transform, TextShape, Billboard, BillboardMode, MeshCollider, PointerEvents, PointerEventType, InputAction, inputSystem, Entity } from '@dcl/sdk/ecs'
-import { Vector3 } from '@dcl/sdk/math'
+import { RemyAgent } from './remy'
+import { engine, Transform, TextShape, Billboard, BillboardMode, MeshCollider, PointerEvents, PointerEventType, InputAction, inputSystem, Entity, executeTask } from '@dcl/sdk/ecs'
+import { loadLandFromScene } from './land'
+import { Color4, Vector3 } from '@dcl/sdk/math'
 import { buildObservatory } from './observatory'
 import { buildScannerScreen } from './scannerScreen'
 import { buildSlate } from './slate'
+import { RemyMenu } from './remyMenu'
 
 const MENU_ITEMS: { label: string; intent: 'FOLLOW' | 'STOP' | 'EXPLORE' | 'STATUS' | 'EMOTE' | 'REPORT' }[] = [
   { label: '[ FOLLOW ]',  intent: 'FOLLOW'  },
@@ -14,8 +16,8 @@ const MENU_ITEMS: { label: string; intent: 'FOLLOW' | 'STOP' | 'EXPLORE' | 'STAT
   { label: '[ STOP ]',    intent: 'STOP'    },
 ]
 
-let menuVisible = false
-const menuEntities: Entity[] = []
+let active: RemyAgent | null = null
+let menu: RemyMenu<typeof MENU_ITEMS[number]['intent']> | null = null
 
 let statusEntity: Entity | null = null
 let reportEntity: Entity | null = null
@@ -23,7 +25,7 @@ let reportTimer = 0
 let reportVisible = false
 
 function showReport() {
-  const remy = getRemyEntity()
+  const remy = active?.entity
   const basePos = remy ? Transform.get(remy).position : Vector3.create(8, 0, 8)
   if (!reportEntity) {
     reportEntity = engine.addEntity()
@@ -56,7 +58,7 @@ function showReport() {
 }
 
 function showStatus() {
-  const remy = getRemyEntity()
+  const remy = active?.entity
   const basePos = remy ? Transform.get(remy).position : Vector3.create(8, 0, 8)
   if (!statusEntity) {
     statusEntity = engine.addEntity()
@@ -66,7 +68,7 @@ function showStatus() {
     position: Vector3.create(basePos.x, basePos.y + 1.2, basePos.z)
   })
   TextShape.createOrReplace(statusEntity, {
-    text: getRemyStatus(),
+    text: active ? active.status() : 'Offline',
     fontSize: 1.2,
     textColor: { r: 0.0, g: 1.0, b: 0.2, a: 1.0 },
   })
@@ -77,36 +79,9 @@ function showStatus() {
 let statusTimer = 0
 let statusVisible = false
 
-function buildMenu() {
-  MENU_ITEMS.forEach((item, i) => {
-    const e = engine.addEntity()
-    Transform.create(e, { position: Vector3.create(0, -100, 0) })
-    TextShape.create(e, { text: '', fontSize: 1.4 })
-    Billboard.create(e, { billboardMode: BillboardMode.BM_Y })
-    MeshCollider.setBox(e)
-    PointerEvents.create(e, {
-      pointerEvents: [{
-        eventType: PointerEventType.PET_DOWN,
-        eventInfo: { button: InputAction.IA_SECONDARY, hoverText: item.label, maxDistance: 20 },
-      }],
-    })
-    menuEntities.push(e)
-  })
-}
-
-function setMenuVisible(v: boolean) {
-  menuVisible = v
-  const remy = getRemyEntity()
-  const basePos = remy ? Transform.get(remy).position : Vector3.create(8, 0, 8)
-  menuEntities.forEach((e, i) => {
-    Transform.getMutable(e).position = v ? Vector3.create(basePos.x, basePos.y + 3.8 - i * 0.65, basePos.z) : Vector3.create(0, -100, 0)
-    TextShape.getMutable(e).text = v ? MENU_ITEMS[i].label : ''
-  })
-}
-
 engine.addSystem(() => {
   if (statusVisible && statusEntity) {
-    const remy = getRemyEntity()
+    const remy = active?.entity
     if (remy) {
       const basePos = Transform.get(remy).position
       Transform.getMutable(statusEntity).position = Vector3.create(basePos.x, basePos.y + 1.2, basePos.z)
@@ -119,7 +94,7 @@ engine.addSystem(() => {
     }
   }
   if (reportVisible && reportEntity) {
-    const remy = getRemyEntity()
+    const remy = active?.entity
     if (remy) {
       const basePos = Transform.get(remy).position
       Transform.getMutable(reportEntity).position = Vector3.create(basePos.x, basePos.y + 1.2, basePos.z)
@@ -131,33 +106,36 @@ engine.addSystem(() => {
       TextShape.getMutable(reportEntity).text = ''
     }
   }
-  if (!menuVisible) return
-  const remy = getRemyEntity()
-  if (remy) {
-    const basePos = Transform.get(remy).position
-    menuEntities.forEach((e, i) => {
-      Transform.getMutable(e).position = Vector3.create(basePos.x, basePos.y + 3.8 - i * 0.65, basePos.z)
-    })
-  }
-  menuEntities.forEach((e, i) => {
-    const cmd = inputSystem.getInputCommand(InputAction.IA_SECONDARY, PointerEventType.PET_DOWN, e)
-    if (cmd) {
-      if (MENU_ITEMS[i].intent === 'STATUS') {
-        showStatus()
-      } else if (MENU_ITEMS[i].intent === 'REPORT') {
-        showReport()
-      } else {
-        executeIntent(MENU_ITEMS[i].intent as any)
-      }
-      setMenuVisible(false)
-    }
-  })
 })
 
 export function main() {
+  // scene.json 의 파셀 목록을 읽어 땅 모양을 맞춘다 (다른 땅에 배포해도 그 땅 안에서만 걷는다)
+  executeTask(async () => { await loadLandFromScene() })
   buildObservatory()
   buildScannerScreen()
   buildSlate()
-  buildMenu()
-  setupRemy(8, 8, () => { setMenuVisible(!menuVisible) })
+  menu = new RemyMenu(MENU_ITEMS, (intent) => {
+    if (intent === 'STATUS') showStatus()
+    else if (intent === 'REPORT') showReport()
+    else active?.intent(intent)
+  })
+  // 세 마리 모두 자유롭게 걷는다. 24시간 파셀 수집은 GitHub Actions(remy1~3)가 맡는다.
+  const onClick = (r: RemyAgent) => {
+    if (!menu) return
+    if (menu.isOpenFor(r.entity)) { menu.hide(); return }
+    active = r
+    menu.show(r.entity, `${r.name.toUpperCase()} · ${r.tag}`)
+  }
+  active = new RemyAgent({
+    name: 'Remy', tag: 'PetShopBros #1', spawn: { x: 8, z: 8 },
+    poll: true, collect: true, agent: 'remy', onClick,
+  })
+  new RemyAgent({
+    name: 'Remy', tag: 'PetShopBros #2', spawn: { x: 24, z: 6 },
+    model: 'assets/rat_amber.glb', tint: Color4.create(1, 0.69, 0.13, 1), onClick,
+  })
+  new RemyAgent({
+    name: 'Remy', tag: 'PetShopBros #3', spawn: { x: -8, z: -8 },
+    model: 'assets/rat_violet.glb', tint: Color4.create(0.62, 0.42, 1, 1), onClick,
+  })
 }
