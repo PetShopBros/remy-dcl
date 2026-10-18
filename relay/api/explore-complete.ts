@@ -25,6 +25,7 @@ export default async function handler(req: Request) {
     target: `dcl:${id}`,
     target_type: 'service',
     outcome: 'success',
+    source: 'seeded', // 우리 에이전트(Remy) 기록 — 외부 사용과 구분
   })
 
   return Response.json({ ok: !error, logged: !logError, logError: logError?.message }, { headers: cors })
